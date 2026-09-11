@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Numerics;
 using Dalamud.Game.Command;
@@ -45,30 +46,21 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
     public string? LastError { get; private set; }
     public double LastMicros { get; private set; }
     public double MaxMicros { get; private set; }
+    public int Tracked { get; private set; }
     public Snapshot Snap;
+
+    private const int MaxTracked = 50;
 
     private readonly Hook<RenderDelegate>? renderHook;
     private readonly Hook<MoveDelegate>? moveHook;
     private readonly Overlay overlay;
     private readonly WindowSystem windows = new("FootIk");
     private readonly Stopwatch clock = Stopwatch.StartNew();
-    private double lastTick;
-    private nint localAddress;
 
-    private LegChain chain;
-    private float blend;           // 0..1
-    private float smoothDrop;      // model units, negative = down
-    private float written;         // the draw offset Y we hold, not the game's total
-    private Vector3 pelvisForMove; // world offset added to the draw object in the movement hook
-    private Vector3 moveWritten;   // the part of it the draw object currently carries
-    private Vector3 lastLogical;
-    private readonly Vector3[] gatherShift = new Vector3[2]; // model space
-    private readonly Vector3[] wallShift = new Vector3[2];   // model space
-    private readonly Vector3[] latchTarget = new Vector3[2]; // world space
-    private readonly bool[] latched = new bool[2];
-    private Vector3 bodyShift;     // model space
-    private float lean;            // radians
-    private Quaternion tilt = Quaternion.Identity; // model space
+    // Keyed by the character address, which the allocator reuses, so each state carries the spawn id it belongs to.
+    // Read from both detours; they run on the same thread, so no synchronisation.
+    private readonly Dictionary<nint, CharState> states = [];
+    private double lastTick;
 
     public Plugin()
     {
@@ -176,16 +168,16 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
     // character is thrown clear of the camera. What was added last frame comes off before Original sees the position.
     private void MoveDetour(nint gameObject)
     {
-        var ours = gameObject == this.localAddress;
-        if (ours && this.moveWritten != Vector3.Zero && ShiftDraw(gameObject, -this.moveWritten))
+        this.states.TryGetValue(gameObject, out var st);
+        if (st != null && st.MoveWritten != Vector3.Zero && ShiftDraw(gameObject, -st.MoveWritten))
         {
-            this.moveWritten = Vector3.Zero;
+            st.MoveWritten = Vector3.Zero;
         }
 
         this.moveHook!.Original(gameObject);
-        if (ours && this.pelvisForMove != Vector3.Zero && ShiftDraw(gameObject, this.pelvisForMove))
+        if (st != null && st.PelvisForMove != Vector3.Zero && ShiftDraw(gameObject, st.PelvisForMove))
         {
-            this.moveWritten = this.pelvisForMove;
+            st.MoveWritten = st.PelvisForMove;
         }
     }
 
@@ -242,35 +234,50 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
     }
 
     // Horizontal needs the movement hook: the game only honours the Y of the draw offset.
-    private void ApplyPelvis(Character* chr, Vector3 total)
+    private void ApplyPelvis(Character* chr, CharState st, Vector3 total)
     {
         if (!float.IsFinite(total.X + total.Y + total.Z))
         {
             return;
         }
 
-        if (total.Y != this.written)
+        if (total.Y != st.Written)
         {
             ref var off = ref chr->GameObject.DrawOffset;
-            chr->GameObject.SetDrawOffset(off.X, off.Y + (total.Y - this.written), off.Z);
-            this.written = total.Y;
+            chr->GameObject.SetDrawOffset(off.X, off.Y + (total.Y - st.Written), off.Z);
+            st.Written = total.Y;
         }
 
-        this.pelvisForMove = this.moveHook == null ? Vector3.Zero : new Vector3(total.X, 0f, total.Z);
+        st.PelvisForMove = this.moveHook == null ? Vector3.Zero : new Vector3(total.X, 0f, total.Z);
     }
 
-    // Takes our own offsets back off the character. The breaker path needs it too: a tripped Tick never reaches
-    // ApplyPelvis again, so without this the character stays sunk until the plugin is unloaded.
+    // Takes our own offsets back off every character we hold. The breaker path needs it too: a tripped Tick never
+    // reaches ApplyPelvis again, so without this the characters stay sunk until the plugin is unloaded. Walks the
+    // object table rather than the states directly: an address we tracked last frame may have been freed since.
     private void Release()
     {
-        this.pelvisForMove = default;
-        if (this.written != 0f && Objects.LocalPlayer is { } lp)
+        for (var i = 0; i < Objects.Length; i++)
         {
-            ref var off = ref ((Character*)lp.Address)->GameObject.DrawOffset;
-            ((Character*)lp.Address)->GameObject.SetDrawOffset(off.X, off.Y - this.written, off.Z);
+            var o = Objects[i];
+            if (o == null || !this.states.TryGetValue(o.Address, out var st) || st.Id != o.GameObjectId)
+            {
+                continue;
+            }
+
+            if (st.Written != 0f)
+            {
+                ref var off = ref ((Character*)o.Address)->GameObject.DrawOffset;
+                ((Character*)o.Address)->GameObject.SetDrawOffset(off.X, off.Y - st.Written, off.Z);
+            }
+
+            if (st.MoveWritten != Vector3.Zero)
+            {
+                ShiftDraw(o.Address, -st.MoveWritten);
+            }
         }
 
-        this.written = 0f;
+        this.states.Clear();
+        this.Tracked = 0;
     }
 
     public void Dispose()

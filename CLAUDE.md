@@ -42,7 +42,9 @@ Single project, single namespace. One `partial class Plugin` split by concern, p
 FootIk/FootIk.csproj      # Sdk="Dalamud.NET.Sdk/15.0.0"; the csproj IS the manifest
 FootIk/Plugin.cs          # services, both hook signatures + install, detours, fault breaker,
                           #   ApplyPelvis (draw offset / movement hook), lifecycle
+FootIk/Plugin.Dispatch.cs # who gets ticked: local player, object-table sweep, eligibility, retirement
 FootIk/Plugin.Tick.cs     # the per-frame pass: a ref struct Frame threaded through named steps
+FootIk/Plugin.Gather.cs   # GatherFeet and its search: sampling, picking, holding, recentring
 FootIk/Plugin.Bones.cs    # ResolvePose (the guard chain), SolveLeg, ApplySpineLean, RotateBody
 FootIk/Plugin.Probes.cs   # Raycast (explicit layer/material filter), TrySupport, GroundAt
 FootIk/Solver.cs          # pure math: Xf, Compose/Relative, FromTo, TwoBone, Pick, SelfTest
@@ -54,7 +56,7 @@ FootIk/Overlay.cs         # /ik window + world markers
 docs/PLAN.md              # the source of truth for research, offsets and milestones
 ```
 
-Per-frame pipeline in `Plugin.Tick.cs`:
+Per-frame pipeline in `Plugin.Tick.cs` (`TickOne`), reached once per character from `Plugin.Dispatch.cs`:
 
 ```
 gate (Mode / jump / conditions / GPose) → ResolvePose → ReadTransform
@@ -62,7 +64,7 @@ gate (Mode / jump / conditions / GPose) → ResolvePose → ReadTransform
   → ApplyPelvis → PlaceFoot → LeanSpine → TiltBody
 ```
 
-Dependency direction: `Tick` orchestrates, and every game-memory read in it (character fields, skeleton transform, bone translations via `Bones.Pos`) sits behind `ResolvePose` or the local-player check; `Bones`/`Probes` own the pointer walks, pose writes and raycasts; `Solver` and `LegChain` are pure and hold no plugin state; `Overlay` reads `Snap` and `Settings` and owns nothing.
+Dependency direction: `Dispatch` picks the characters and `TickOne` orchestrates each, and every game-memory read in it (character fields, skeleton transform, bone translations via `Bones.Pos`) sits behind `ResolvePose` or the local-player check; `Bones`/`Probes` own the pointer walks, pose writes and raycasts; `Solver` and `LegChain` are pure and hold no plugin state; `Overlay` reads `Snap` and `Settings` and owns nothing.
 
 ### Manifest rule (critical)
 
@@ -111,7 +113,7 @@ dotnet build FootIk/FootIk.csproj -c Release
 
 Dev-load `FootIk\bin\Release\FootIk.dll` via `/xlplugins`.
 
-**In-game verification loop:** build → `/xlplugins` dev-reload → `/ik` → the Feet / Ankles / Edges / Lean / Status tabs. Toggling `Enabled` is the A/B. Anything touching hooks, collision or bone writes **can only be verified in game** — say so explicitly rather than claiming verification from a green build.
+**In-game verification loop:** build → `/xlplugins` dev-reload → `/ik` → the Feet / Ankles / Edges / Lean / Emotes / Performance / Status tabs. Toggling `Enabled` is the A/B. Anything touching hooks, collision or bone writes **can only be verified in game** — say so explicitly rather than claiming verification from a green build.
 
 ## Workflow
 

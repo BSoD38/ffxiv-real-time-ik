@@ -15,7 +15,7 @@ internal sealed class Overlay : Window
 
     // Sliders fill the row minus room for the labels. The reserve is the widest label drawn in this tab last frame,
     // which keeps them aligned without every call site repeating its label.
-    private readonly float[] labelReserve = new float[6];
+    private readonly float[] labelReserve = new float[7];
     private int tab;
     private float labelMax;
 
@@ -38,7 +38,8 @@ internal sealed class Overlay : Window
         this.Tab(2, "Edges", this.DrawEdges);
         this.Tab(3, "Lean", this.DrawLean);
         this.Tab(4, "Emotes", this.DrawEmotes);
-        this.Tab(5, "Status", this.DrawStatus);
+        this.Tab(5, "Performance", this.DrawPerformance);
+        this.Tab(6, "Status", this.DrawStatus);
         ImGui.EndTabBar();
     }
 
@@ -76,15 +77,31 @@ internal sealed class Overlay : Window
         Help(help);
     }
 
-    private void SliderInt(string label, ref int v, int min, int max, string help)
+    private void SliderInt(string label, ref int v, int min, int max, string format, string help)
     {
         var style = ImGui.GetStyle();
         this.labelMax = MathF.Max(this.labelMax, ImGui.CalcTextSize(label).X);
         var reserve = this.labelReserve[this.tab] + ImGui.CalcTextSize("(?)").X + style.ItemInnerSpacing.X + (style.ItemSpacing.X * 2f);
         ImGui.SetNextItemWidth(MathF.Max(MinSliderWidth, ImGui.GetContentRegionAvail().X - reserve));
-        ImGui.SliderInt(label, ref v, min, max);
+        ImGui.SliderInt(label, ref v, min, max, format);
         if (ImGui.IsItemDeactivatedAfterEdit())
         {
+            this.plugin.SaveSettings();
+        }
+
+        Help(help);
+    }
+
+    private void Combo(string label, ref Who v, string items, string help)
+    {
+        var style = ImGui.GetStyle();
+        this.labelMax = MathF.Max(this.labelMax, ImGui.CalcTextSize(label).X);
+        var reserve = this.labelReserve[this.tab] + ImGui.CalcTextSize("(?)").X + style.ItemInnerSpacing.X + (style.ItemSpacing.X * 2f);
+        ImGui.SetNextItemWidth(MathF.Max(MinSliderWidth, ImGui.GetContentRegionAvail().X - reserve));
+        var i = (int)v;
+        if (ImGui.Combo(label, ref i, items))
+        {
+            v = (Who)i;
             this.plugin.SaveSettings();
         }
 
@@ -132,8 +149,6 @@ internal sealed class Overlay : Window
         ImGui.TextDisabled($"Leg length {L:F2} m. Distances scale with it.");
         ImGui.Spacing();
 
-        Slider("Leg balance", ref c.LegBalance, 0f, 1f, "%.2f",
-            "How much both legs share the effort when the feet stand at different heights. Low values keep one leg straight and bend the other a lot. High values bend both legs a little.");
         Slider("Max body drop", ref c.MaxDropFrac, 0f, 0.8f, $"%.2f  ({c.MaxDropFrac * L:F2} m)",
             "How far the body may sink toward a foot standing lower than the character. Low values may cause the lowest foot to hover above the ground. High values may cause unnatural poses.");
         Slider("Max body rise", ref c.MaxPelvisRaiseFrac, 0f, 0.4f, $"%.2f  ({c.MaxPelvisRaiseFrac * L:F2} m)",
@@ -143,7 +158,7 @@ internal sealed class Overlay : Window
         Slider("Edge drop", ref c.MaxStepDownFrac, 0.05f, 0.8f, $"%.2f  ({c.MaxStepDownFrac * L:F2} m)",
             "How far below the character a foot will reach for the ground. A foot over a bigger drop than this stays in place instead of stretching down.");
         this.Check("Keep feet out of walls", ref c.KeepFeetOutOfWalls);
-        Help("Stops the feet from clipping into walls, kerbs and steps by moving them slightly aside.");
+        Help("Stops the feet from clipping into walls, kerbs and steps by moving them slightly aside. Works best when feet gathering is enabled.");
         if (c.KeepFeetOutOfWalls)
         {
             Slider("Foot width", ref c.WallClearanceFrac, 0f, 0.2f, $"%.2f  ({c.WallClearanceFrac * 2f * L:F2} m wide)",
@@ -196,17 +211,20 @@ internal sealed class Overlay : Window
         var L = this.plugin.Snap.LegLength;
 
         this.Check("Gather feet", ref c.GatherFeet);
-        ImGui.TextDisabled("Move your character's feet together when standing on narrow platforms to avoid them floating over an edge.");
+        Help("Move your character's feet together when standing on narrow platforms to avoid them floating over an edge.");
         ImGui.Spacing();
 
         ImGui.BeginDisabled(!c.GatherFeet);
+        this.Check("Platforming mode", ref c.GatherToPosition);
+        Help("Enabling this prioritises feet positions that avoid sliding your character off-centre. This helps better seeing where your character really is, at the cost of worse poses.");
+        ImGui.Spacing();
         Slider("Min stance", ref c.MinStanceFrac, 0.02f, 0.4f, $"%.2f  ({c.MinStanceFrac * L:F2} m)",
             "How close the feet can be of each other when gathering. Avoids the feet crossing or overlapping each other.");
         Slider("Straighten legs", ref c.GatherStraighten, 0f, 1f, "%.2f",
             "How much the legs straighten when the feet are gathered. Avoids legs being flexed while gathered on some races.");
         Slider("Feet forward", ref c.GatherForward, 0f, 1f, "%.2f",
             "How strongly the knees and feet turn to face forward when gathered. Avoids duck feet on some races.");
-        this.SliderInt("Precision", ref c.GatherPrecision, 1, 4,
+        this.SliderInt("Precision", ref c.GatherPrecision, 1, 4, $"%d  ({4 * c.GatherPrecision} directions)",
             "How carefully the plugin looks around each foot for ground to stand on. Higher finds narrow rails and beams more reliably and keeps the feet steadier, but costs more each frame. Lower it if the game slows down near edges.");
         ImGui.EndDisabled();
 
@@ -262,6 +280,33 @@ internal sealed class Overlay : Window
         Slider("Sit tilt smoothing", ref c.SitTiltTau, 0.05f, 1.5f, "%.2f s",
             "How quickly the body settles onto the slope when sitting down, and comes back up when standing.");
         ImGui.EndDisabled();
+    }
+
+    private void DrawPerformance()
+    {
+        var c = this.plugin.Settings;
+
+        this.Check("Apply on other characters", ref c.Others);
+        Help("Applies IK to other players and NPCs around you. Each one costs FPS. Tweak the settings if the game stutters too much.");
+        ImGui.Spacing();
+
+        ImGui.BeginDisabled(!c.Others);
+        this.SliderInt("Max characters", ref c.MaxOthers, 1, 50, "%d",
+            "How many characters to apply IK to. Lower this if your frame rate drops in crowds.");
+        Slider("Max distance", ref c.OthersRadius, 3f, 50f, "%.0f yalms",
+            "How far away a character can be and still have its feet placed.");
+        this.Combo("Apply IK to", ref c.Who, "Everyone\0Other players\0Friends and party\0Party only\0",
+            "Which characters around you have IK applied. \"Everyone\" includes NPCs.");
+        ImGui.BeginDisabled(!c.GatherFeet);
+        this.SliderInt("Gather feet precision", ref c.OthersGatherPrecision, 0, 4,
+            c.OthersGatherPrecision == 0 ? "off" : $"%d  ({4 * c.OthersGatherPrecision} directions)",
+            "Whether other characters also get their feet gathered onto narrow ledges and rails, and how carefully. Needs Gather feet on the Edges tab.");
+        ImGui.EndDisabled();
+        ImGui.EndDisabled();
+
+        ImGui.Spacing();
+        ImGui.TextDisabled($"Working on {this.plugin.Tracked} character{(this.plugin.Tracked == 1 ? string.Empty : "s")}.");
+        ImGui.TextDisabled($"Frame cost {this.plugin.LastMicros:F0} us, max {this.plugin.MaxMicros:F0} us.");
     }
 
     private void DrawStatus()

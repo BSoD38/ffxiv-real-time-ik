@@ -7,6 +7,8 @@ namespace FootIk;
 public enum Block
 {
     None,
+    Off, // the step did not run at all: switched off, the gate closed, or an emote
+    Settled, // it ran; this foot stands on its own ground, or on an incline where a foot below level is expected
     NoEdge, // the search found no standable ground to move onto
     Squeezed, // no two spots a stance apart: the feet stand closer than the minimum
 }

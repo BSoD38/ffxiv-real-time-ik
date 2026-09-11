@@ -147,11 +147,11 @@ public sealed unsafe partial class Plugin
     }
 
     // lean is radians, forward positive: a third on each spine bone, the neck counter-rotated so the head stays level.
-    private void ApplySpineLean(Skeleton* skel, hkaPose* pose, float lean)
+    private static void ApplySpineLean(Skeleton* skel, hkaPose* pose, in LegChain chain, float lean)
     {
-        var sub = this.chain.SpineSub;
-        var ps = this.chain.SpineParentSlot;
-        var axis = Vector3.Cross(Vector3.UnitY, this.chain.BindForward);
+        var sub = chain.SpineSub;
+        var ps = chain.SpineParentSlot;
+        var axis = Vector3.Cross(Vector3.UnitY, chain.BindForward);
         // The subtree is the whole upper body, sized by game data: an unbounded stackalloc risks a stack overflow,
         // which is not catchable, and an empty one indexes out of bounds below.
         if (sub.Length is 0 or > 256 || axis.LengthSquared() < 1e-8f)
@@ -175,11 +175,11 @@ public sealed unsafe partial class Plugin
         for (var i = 1; i < sub.Length; i++)
         {
             nw[i] = Solver.Compose(in nw[ps[i]], Solver.Relative(in old[ps[i]], in old[i]));
-            if (i == this.chain.SpineBSlot || i == this.chain.SpineCSlot)
+            if (i == chain.SpineBSlot || i == chain.SpineCSlot)
             {
                 nw[i].R = Quaternion.Normalize(third * nw[i].R);
             }
-            else if (i == this.chain.NeckSlot)
+            else if (i == chain.NeckSlot)
             {
                 nw[i].R = Quaternion.Normalize(counter * nw[i].R);
             }
@@ -206,12 +206,12 @@ public sealed unsafe partial class Plugin
         {
             ref var part = ref skel->PartialSkeletons[p];
             var anchor = (int)part.ConnectedParentBoneIndex;
-            if (anchor < 0 || anchor >= this.chain.SpineSlotOf.Length)
+            if (anchor < 0 || anchor >= chain.SpineSlotOf.Length)
             {
                 continue;
             }
 
-            var j = this.chain.SpineSlotOf[anchor];
+            var j = chain.SpineSlotOf[anchor];
             var pp = part.GetHavokPose(0);
             if (j < 0 || pp == null || pp->Skeleton == null || pp->ModelPose.Length != pp->Skeleton->Bones.Length)
             {

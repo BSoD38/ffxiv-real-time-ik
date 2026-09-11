@@ -3,6 +3,16 @@ using Dalamud.Configuration;
 
 namespace FootIk;
 
+// Who the mod works on besides you, widest first. Relations come from the character's own flags, so no social-window
+// proxy is involved: it is the same byte that draws the friend icon on a nameplate.
+public enum Who
+{
+    Everyone,
+    Players,
+    FriendsAndParty,
+    Party,
+}
+
 // Fields ending in Frac are fractions of the bind-pose leg length, so races of every size behave alike.
 // Saved by Dalamud as JSON. These are fields rather than properties because ImGui takes each one by reference.
 public sealed class Settings : IPluginConfiguration
@@ -14,7 +24,6 @@ public sealed class Settings : IPluginConfiguration
     public float BlendSeconds = 0.15f;
     public float PelvisTau = 0.08f;
 
-    public float LegBalance = 0.7f; // 0 leaves the body where the animation puts it, 1 splits a height difference evenly
     public float MaxDropFrac = 0.40f;
     public float MaxRaiseFrac = 0.35f;
     public float MaxStepFrac = 0.60f;
@@ -31,10 +40,12 @@ public sealed class Settings : IPluginConfiguration
 
     public float MaxStepDownFrac = 0.25f;
     public bool GatherFeet;
+    public bool GatherToPosition; // gather onto the logical position instead of the nearest support, and leave the body on it
     public float GatherTauIn = 0.1f;
     public float GatherTauOut = 0.1f;
     public float StillSpeed = 0.15f; // m/s
     public int GatherPrecision = 2; // search directions = 4x this
+    public int OthersGatherPrecision; // the same for other characters; 0 leaves their feet where the animation puts them
     public bool KeepFeetOutOfWalls = true;
     public float WallClearanceFrac = 0.06f; // half a foot's width: the box a foot may not stand inside a wall with
     public float MinStanceFrac = 0.10f;
@@ -53,6 +64,11 @@ public sealed class Settings : IPluginConfiguration
     public bool Emotes = true;
     public float MaxSitTiltDeg = 20f;
     public float SitTiltTau = 0.4f;
+
+    public bool Others;
+    public int MaxOthers = 4;
+    public Who Who;
+    public float OthersRadius = 15f; // yalms from the local player, not a body-relative distance
 
     // A truncated or hand-edited file can deserialise a NaN, and NaN spreads through the pose maths silently: every
     // comparison against it is false, so the guards downstream let it through as "not too far" rather than catching it.
