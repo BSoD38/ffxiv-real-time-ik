@@ -77,20 +77,26 @@ public sealed unsafe partial class Plugin
     }
 
     // What is under (at.X, at.Z), relative to the ground under the body.
-    private Ground ProbeSupport(Vector3 at, in Frame f, out RaycastHit hit)
+    private Ground ProbeSupport(Vector3 at, in Frame f, out RaycastHit hit) => this.ProbeSupport(at, in f, out hit, out _);
+
+    private Ground ProbeSupport(Vector3 at, in Frame f, out RaycastHit hit, out float gy)
     {
+        gy = 0f;
         if (!this.TryGround(at, in f, out hit, out var y))
         {
             return Ground.None;
         }
 
-        var gy = ((y - f.OriginY) / f.Scale.Y) - f.BaseY;
+        gy = ((y - f.OriginY) / f.Scale.Y) - f.BaseY;
         return gy > f.MaxStep ? Ground.TooHigh
             : gy < -f.MaxStepDown ? Ground.TooLow
             : Ground.Standable;
     }
 
     private bool TrySupport(Vector3 at, in Frame f, out RaycastHit hit) => this.ProbeSupport(at, in f, out hit) == Ground.Standable;
+
+    // With `level`, only ground at the level the character stands on, not lower ground it could step down to.
+    private bool TrySupport(Vector3 at, in Frame f, bool level, out RaycastHit hit) => this.ProbeSupport(at, in f, out hit, out var gy) == Ground.Standable && (!level || MathF.Abs(gy) <= f.StepTol);
 
     // The smallest horizontal move that takes the boot out of whatever wall it overlaps. Feelers reach from the ankle,
     // at boot height, to each edge of the box; one cut short by something steep means the boot is inside it by the

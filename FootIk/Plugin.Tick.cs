@@ -9,14 +9,15 @@ using FFXIVClientStructs.Havok.Common.Base.Math.QsTransform;
 
 namespace FootIk;
 
-// All model-space heights here are relative to the character origin. Step thresholds and the probe window are judged
-// from the ground under the body (Frame.BaseY): an animation with root motion can carry the body far from the origin.
+// All model-space heights here are relative to the character origin. During an emote, step thresholds and the probe
+// window are judged from the ground under the body instead (Frame.BaseY): root motion can carry it far from the origin.
+// Never while walking: on a guardrail the ground under the body is the deck below, and the origin is the level.
 public sealed unsafe partial class Plugin
 {
     private ref struct Frame
     {
         public float Dt;
-        public float LegLen, MaxDrop, MaxRaise, MaxStep, MaxStepDown, LiftThreshold;
+        public float LegLen, MaxDrop, MaxRaise, MaxStep, MaxStepDown, LiftThreshold, StepTol;
         public Vector3 Pos, Scale, PosAnchor;
         public Quaternion Rot;
         public float OriginY, RayUp, RayDown, MaxDist, Reach;
@@ -94,6 +95,7 @@ public sealed unsafe partial class Plugin
         f.MaxRaise = c.MaxRaiseFrac * f.LegLen;
         f.MaxStep = c.MaxStepFrac * f.LegLen;
         f.MaxStepDown = c.MaxStepDownFrac * f.LegLen;
+        f.StepTol = 0.15f * f.LegLen; // a stair tread, not a curb or a rail
         f.LiftThreshold = MathF.Max(c.LiftThresholdFrac * f.LegLen, 1e-3f);
         snap.LegLength = f.LegLen;
         this.blend = MoveToward(this.blend, snap.Gate && poseOk ? 1f : 0f, c.BlendSeconds > 0 ? dt / c.BlendSeconds : 1f);
@@ -120,7 +122,13 @@ public sealed unsafe partial class Plugin
 
         if (active)
         {
-            this.ProbeBase(ref f);
+            // Only an emote can carry the body away from the origin. While walking, the logical position is the level the
+            // character stands on; the ground under the hips may be a deck a metre below the rail it is walking along.
+            if (mode != CharacterModes.Normal)
+            {
+                this.ProbeBase(ref f);
+            }
+
             snap.BaseY = f.BaseY;
             Span<Vector3> desired = stackalloc Vector3[2];
             this.ProbeFoot(ref f, 0, ref snap.Left);
@@ -309,6 +317,7 @@ public sealed unsafe partial class Plugin
         // Evaluated at the ankle's XZ rather than at the winning probe: on a slope the mid-foot probe is half a foot away.
         foot.GroundModelY = (GroundAt(in chosen, foot.AnkleWorld.X, foot.AnkleWorld.Z, out foot.HitNormal) - f.OriginY) / f.Scale.Y;
         foot.OverEdge = foot.GroundModelY - f.BaseY < -f.MaxStepDown;
+        foot.BelowLevel = foot.GroundModelY - f.BaseY < -f.StepTol;
     }
 
     private const int Steps = 20;
@@ -328,7 +337,21 @@ public sealed unsafe partial class Plugin
         // Not while the gate is closed either: the game flags a fall as jumping, and a character in the air has nothing to
         // gather onto. Picking targets on the ledge it just left would drag the feet, and the body with them, back to it
         // for as long as the blend takes to fade.
-        if (!c.GatherFeet || !snap.Gate || (!snap.Left.OverEdge && !snap.Right.OverEdge))
+        if (!c.GatherFeet || !snap.Gate)
+        {
+            this.latched[0] = false;
+            this.latched[1] = false;
+            return;
+        }
+
+        // A foot over ground a tread or more below the character is over a drop, unless the character is on an incline and
+        // that is simply where the slope or the stair puts a trailing foot: beside a rail or a curb it moves onto the level
+        // support like a foot over a void; on a hill it reaches for the ground as before.
+        var incline = (snap.Left.BelowLevel || snap.Right.BelowLevel) && this.OnIncline(in f);
+        Span<bool> needs = stackalloc bool[2];
+        needs[0] = snap.Left.OverEdge || (snap.Left.BelowLevel && !incline);
+        needs[1] = snap.Right.OverEdge || (snap.Right.BelowLevel && !incline);
+        if (!needs[0] && !needs[1])
         {
             this.latched[0] = false;
             this.latched[1] = false;
@@ -348,6 +371,7 @@ public sealed unsafe partial class Plugin
         Span<int> count = stackalloc int[2];
         Span<bool> held = stackalloc bool[2];
         Span<bool> searched = stackalloc bool[2];
+        Span<bool> level = stackalloc bool[2];
         held[0] = this.Hold(ref f, 0);
         held[1] = this.Hold(ref f, 1);
         // A pair held through a turn re-plants only once the turn has crossed the legs, and a little past that so a stance
@@ -368,7 +392,7 @@ public sealed unsafe partial class Plugin
         {
             ref var foot = ref Foot(ref snap, s);
             var at = s * MaxSpots;
-            if (held[s] || !foot.OverEdge)
+            if (held[s] || !needs[s])
             {
                 spots[at] = held[s] ? this.latchTarget[s] : foot.AnkleWorld;
                 costs[at] = 0f;
@@ -377,7 +401,15 @@ public sealed unsafe partial class Plugin
             }
             else
             {
-                count[s] = this.Sample(ref f, s, in foot, spots.Slice(at, MaxSpots), costs.Slice(at, MaxSpots), lines.Slice(at, MaxSpots));
+                // Level ground first; only a foot over a void with none in reach may take lower ground it could step down to.
+                level[s] = true;
+                count[s] = this.Sample(ref f, s, in foot, true, false, spots.Slice(at, MaxSpots), costs.Slice(at, MaxSpots), lines.Slice(at, MaxSpots));
+                if (count[s] == 0 && foot.OverEdge)
+                {
+                    level[s] = false;
+                    count[s] = this.Sample(ref f, s, in foot, false, false, spots.Slice(at, MaxSpots), costs.Slice(at, MaxSpots), lines.Slice(at, MaxSpots));
+                }
+
                 searched[s] = true;
             }
         }
@@ -392,7 +424,8 @@ public sealed unsafe partial class Plugin
                 {
                     ref var foot = ref Foot(ref snap, s);
                     var at = (s * MaxSpots) + 1;
-                    count[s] += this.Sample(ref f, s, in foot, spots.Slice(at, MaxSpots - 1), costs.Slice(at, MaxSpots - 1), lines.Slice(at, MaxSpots - 1));
+                    level[s] = true;
+                    count[s] += this.Sample(ref f, s, in foot, true, !needs[s], spots.Slice(at, MaxSpots - 1), costs.Slice(at, MaxSpots - 1), lines.Slice(at, MaxSpots - 1));
                 }
             }
 
@@ -408,15 +441,15 @@ public sealed unsafe partial class Plugin
             var i = s == 0 ? iL : iR;
             if (!found || i < 0)
             {
-                foot.GatherBlock = foot.OverEdge ? Block.NoEdge : Block.None;
+                foot.GatherBlock = needs[s] ? Block.NoEdge : Block.None;
                 this.latched[s] = false;
                 continue;
             }
 
-            var kept = i == 0 && (held[s] || !foot.OverEdge);
+            var kept = i == 0 && (held[s] || !needs[s]);
             var at = (s * MaxSpots) + i;
             target[s] = spots[at];
-            if (lines[at] >= 0 && this.Recentre(foot.AnkleWorld, lines[at], in f, out var mid, out _))
+            if (lines[at] >= 0 && this.Recentre(foot.AnkleWorld, lines[at], in f, level[s], out var mid, out _))
             {
                 target[s] = mid;
             }
@@ -430,7 +463,7 @@ public sealed unsafe partial class Plugin
             }
         }
 
-        this.Tighten(target, free, minSep, footLen, side, fwd, in f);
+        this.Tighten(target, free, level, minSep, footLen, side, fwd, in f);
 
         for (var s = 0; s < 2; s++)
         {
@@ -440,7 +473,7 @@ public sealed unsafe partial class Plugin
             }
 
             ref var foot = ref Foot(ref snap, s);
-            if (!this.TrySupport(target[s], in f, out var support))
+            if (!this.TrySupport(target[s], in f, level[s], out var support))
             {
                 foot.GatherBlock = Block.NoEdge;
                 this.latched[s] = false;
@@ -465,10 +498,27 @@ public sealed unsafe partial class Plugin
         }
     }
 
+    // Up or down a stair or a slope, the ground half a leg ahead of the character and half a leg behind differ by more
+    // than a tread. Along a rail or a curb they match, whether both land on the rail or both on the deck below it.
+    private bool OnIncline(in Frame f)
+    {
+        var dir = f.VelDir == Vector3.Zero ? Vector3.Transform(this.chain.BindForward, f.Rot) : f.VelDir;
+        dir.Y = 0f;
+        if (dir.LengthSquared() < 1e-6f)
+        {
+            return false;
+        }
+
+        dir = Vector3.Normalize(dir) * (0.5f * f.LegLen * f.Scale.Y);
+        return this.TryGround(f.PosAnchor + dir, in f, out _, out var ahead)
+            && this.TryGround(f.PosAnchor - dir, in f, out _, out var behind)
+            && MathF.Abs(ahead - behind) > f.StepTol * f.Scale.Y;
+    }
+
     // Candidates lie on a fan of lines, so on a thin support far from the ankle they are spaced out along it and the
     // cheapest fitting pair can be much wider than it needs to be. Both spots stand on the support, and on anything
     // straight so does the line between them: draw the movable feet together along it to the width that just fits.
-    private void Tighten(scoped Span<Vector3> target, scoped ReadOnlySpan<bool> free, float minSep, float footLen, Vector3 side, Vector3 fwd, in Frame f)
+    private void Tighten(scoped Span<Vector3> target, scoped ReadOnlySpan<bool> free, scoped ReadOnlySpan<bool> level, float minSep, float footLen, Vector3 side, Vector3 fwd, in Frame f)
     {
         if (!free[0] && !free[1])
         {
@@ -498,7 +548,7 @@ public sealed unsafe partial class Plugin
             var move = excess * share * half;
             var l = free[0] ? target[0] + (u * move) : target[0];
             var r = free[1] ? target[1] - (u * move) : target[1];
-            if ((!free[0] || this.TrySupport(l, in f, out _)) && (!free[1] || this.TrySupport(r, in f, out _)))
+            if ((!free[0] || this.TrySupport(l, in f, level[0], out _)) && (!free[1] || this.TrySupport(r, in f, level[1], out _)))
             {
                 target[0] = l;
                 target[1] = r;
@@ -532,8 +582,10 @@ public sealed unsafe partial class Plugin
     // Standable samples along lines fanned out from the ankle, each line cut where ground too high to walk through
     // begins. A sample beside an edge costs a whole reach extra, so a foot settles one step in wherever the support is
     // wide enough; one with an edge on both sides is marked for recentring. Costs also favour the previous target, so a
-    // moving pattern does not hop between equally good spots.
-    private int Sample(ref Frame f, int s, in FootSnapshot foot, scoped Span<Vector3> spots, scoped Span<float> costs, scoped Span<int> lines)
+    // moving pattern does not hop between equally good spots. With `levelOnly`, only ground at the level the character
+    // stands on counts, for a foot that has lower ground to fall back on; `ankleOk` says whether where the ankle already
+    // is counts as ground.
+    private int Sample(ref Frame f, int s, in FootSnapshot foot, bool levelOnly, bool ankleOk, scoped Span<Vector3> spots, scoped Span<float> costs, scoped Span<int> lines)
     {
         var dirs = this.Dirs;
         var step = f.Reach / Steps;
@@ -543,19 +595,19 @@ public sealed unsafe partial class Plugin
         {
             var dir = this.SearchDir(d * 64, in f);
             ok.Clear();
-            ok[0] = !foot.OverEdge;
+            ok[0] = ankleOk;
             ok[Steps + 1] = true;
             var last = Steps;
             for (var k = 1; k <= Steps; k++)
             {
-                var ground = this.ProbeSupport(foot.AnkleWorld + (dir * (step * k)), in f, out _);
+                var ground = this.ProbeSupport(foot.AnkleWorld + (dir * (step * k)), in f, out _, out var gy);
                 if (ground == Ground.TooHigh)
                 {
                     last = k - 1;
                     break;
                 }
 
-                ok[k] = ground == Ground.Standable;
+                ok[k] = ground == Ground.Standable && (!levelOnly || MathF.Abs(gy) <= f.StepTol);
             }
 
             for (var k = 1; k <= last; k++)
@@ -589,24 +641,24 @@ public sealed unsafe partial class Plugin
 
     // A sample with no standable neighbour on its line stands on something narrower than the spacing, a guardrail for
     // one, and may sit at its very edge. Find both edges and stand in the middle.
-    private bool Recentre(Vector3 ankle, int line, in Frame f, out Vector3 mid, out RaycastHit hit)
+    private bool Recentre(Vector3 ankle, int line, in Frame f, bool level, out Vector3 mid, out RaycastHit hit)
     {
         var dir = this.SearchDir(line, in f);
         var step = f.Reach / Steps;
         var k = line % 64;
-        var near = this.Edge(ankle, dir, step * (k - 1), step * k, in f);
-        var far = this.Edge(ankle, dir, step * (k + 1), step * k, in f);
+        var near = this.Edge(ankle, dir, step * (k - 1), step * k, in f, level);
+        var far = this.Edge(ankle, dir, step * (k + 1), step * k, in f, level);
         mid = ankle + (dir * ((near + far) * 0.5f));
-        return this.TrySupport(mid, in f, out hit);
+        return this.TrySupport(mid, in f, level, out hit);
     }
 
     // Where standable ground begins along dir, between `off` (not standable) and `on` (standable).
-    private float Edge(Vector3 from, Vector3 dir, float off, float on, in Frame f)
+    private float Edge(Vector3 from, Vector3 dir, float off, float on, in Frame f, bool level)
     {
         for (var i = 0; i < 3; i++)
         {
             var m = (off + on) * 0.5f;
-            if (this.TrySupport(from + (dir * m), in f, out _))
+            if (this.TrySupport(from + (dir * m), in f, level, out _))
             {
                 on = m;
             }

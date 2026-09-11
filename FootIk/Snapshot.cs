@@ -27,6 +27,7 @@ public struct FootSnapshot
     public float AnkleAboveGround;
     public float Delta;
     public bool OverEdge;
+    public bool BelowLevel; // ground a step or more below the level the character stands on
     public bool Gathered;
     public Vector3 GatherShift;
     public Vector3 WallShift;
