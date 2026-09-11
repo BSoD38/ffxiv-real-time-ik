@@ -336,8 +336,8 @@ public sealed unsafe partial class Plugin
         desired.Clear();
         // Not while the gate is closed either: the game flags a fall as jumping, and a character in the air has nothing to
         // gather onto. Picking targets on the ledge it just left would drag the feet, and the body with them, back to it
-        // for as long as the blend takes to fade.
-        if (!c.GatherFeet || !snap.Gate)
+        // for as long as the blend takes to fade. Not during emotes either: a dance stance gathered onto a rail reads wrong.
+        if (!c.GatherFeet || !snap.Gate || snap.Mode != CharacterModes.Normal)
         {
             this.latched[0] = false;
             this.latched[1] = false;
@@ -966,15 +966,21 @@ public sealed unsafe partial class Plugin
         }
 
         // The lean is additive on the animated spine, so measure the animated pitch first and use only the room left
-        // below the cap. A male Hrothgar idles already well pitched forward.
+        // between the floor and the cap. A male Hrothgar idles already well pitched forward; an upright race leaning back
+        // downhill must not end up arched past vertical.
         var spineDir = Bones.Pos(in f.Bones[this.chain.Neck]) - Bones.Pos(in f.Bones[this.chain.SpineA]);
         var pitch = MathF.Atan2(Vector3.Dot(spineDir, this.chain.BindForward), spineDir.Y);
         snap.SpinePitchDeg = pitch * 180f / MathF.PI;
         var leanApplied = this.lean * this.blend;
-        var room = c.MaxTotalPitchDeg * MathF.PI / 180f - pitch;
+        var room = (c.MaxTotalPitchDeg * MathF.PI / 180f) - pitch;
+        var roomBack = pitch - (c.MinTotalPitchDeg * MathF.PI / 180f);
         if (leanApplied > room)
         {
             leanApplied = MathF.Max(0f, room);
+        }
+        else if (-leanApplied > roomBack)
+        {
+            leanApplied = -MathF.Max(0f, roomBack);
         }
 
         if (MathF.Abs(leanApplied) > 0.002f)

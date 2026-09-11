@@ -47,6 +47,7 @@ public sealed class Settings : IPluginConfiguration
     public float LeanDownhillGain = 1.0f; // hunched races (Hrothgar) want a weak uphill lean but a strong downhill one
     public float MaxLeanDeg = 30f;
     public float MaxTotalPitchDeg = 60f; // the Hrothgar run animation is already pitched ~40 forward
+    public float MinTotalPitchDeg = -5f; // the spine may lean back a little past upright, never further
     public float LeanTau = 0.3f;
 
     public bool Emotes = true;

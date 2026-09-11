@@ -241,6 +241,8 @@ internal sealed class Overlay : Window
         {
             Slider("Max spine pitch", ref c.MaxTotalPitchDeg, 10f, 90f, "%.0f deg",
                 "Limits how much the character may lean while taking account their base animations. Avoids hunched races lean forwards too much.");
+            Slider("Min spine pitch", ref c.MinTotalPitchDeg, -45f, 0f, "%.0f deg",
+                "Limits how far back the character may lean, taking account of their base animation. Avoids upright races arching backwards when running downhill.");
             Slider("Lean smoothing", ref c.LeanTau, 0.05f, 1f, "%.2f s",
                 "Smoothing on the lean angle, so a sudden change in terrain does not snap the torso.");
         }
