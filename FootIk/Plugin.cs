@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Numerics;
 using Dalamud.Game.Command;
 using Dalamud.Hooking;
+using Dalamud.Interface.Windowing;
 using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
@@ -49,6 +50,7 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
     private readonly Hook<RenderDelegate>? renderHook;
     private readonly Hook<MoveDelegate>? moveHook;
     private readonly Overlay overlay;
+    private readonly WindowSystem windows = new("FootIk");
     private readonly Stopwatch clock = Stopwatch.StartNew();
     private double lastTick;
     private nint localAddress;
@@ -111,7 +113,9 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
         }
 
         this.overlay = new Overlay(this);
-        PluginInterface.UiBuilder.Draw += this.overlay.Draw;
+        this.windows.AddWindow(this.overlay);
+        PluginInterface.UiBuilder.Draw += this.windows.Draw;
+        PluginInterface.UiBuilder.Draw += this.overlay.DrawWorldDots;
         PluginInterface.UiBuilder.OpenMainUi += this.overlay.Toggle;
         PluginInterface.UiBuilder.OpenConfigUi += this.overlay.Toggle;
         Commands.AddHandler("/ik", new CommandInfo((_, _) => this.overlay.Toggle()) { HelpMessage = "Toggle the Inverse Kinematics window." });
@@ -276,7 +280,9 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
         this.moveHook?.Dispose();
 
         Commands.RemoveHandler("/ik");
-        PluginInterface.UiBuilder.Draw -= this.overlay.Draw;
+        PluginInterface.UiBuilder.Draw -= this.windows.Draw;
+        PluginInterface.UiBuilder.Draw -= this.overlay.DrawWorldDots;
+        this.windows.RemoveAllWindows();
         PluginInterface.UiBuilder.OpenMainUi -= this.overlay.Toggle;
         PluginInterface.UiBuilder.OpenConfigUi -= this.overlay.Toggle;
     }

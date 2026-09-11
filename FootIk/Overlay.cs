@@ -1,16 +1,17 @@
 using System;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Windowing;
 
 namespace FootIk;
 
-internal sealed class Overlay(Plugin plugin)
+internal sealed class Overlay : Window
 {
     // Labels are short names: an ImGui label sits to the right of its widget, so a long one widens the whole window.
     // Units and computed metres go in the slider's format string, explanations in tooltips.
     private const float MinSliderWidth = 80f;
 
-    private bool open = true;
+    private readonly Plugin plugin;
 
     // Sliders fill the row minus room for the labels. The reserve is the widest label drawn in this tab last frame,
     // which keeps them aligned without every call site repeating its label.
@@ -18,33 +19,27 @@ internal sealed class Overlay(Plugin plugin)
     private int tab;
     private float labelMax;
 
-    public void Toggle() => this.open = !this.open;
-
-    public void Draw()
+    public Overlay(Plugin plugin) : base("Inverse Kinematics")
     {
-        if (plugin.Settings.ShowMarkers)
-        {
-            this.DrawWorldDots();
-        }
+        this.plugin = plugin;
+        this.Size = new Vector2(440, 520);
+        this.SizeCondition = ImGuiCond.FirstUseEver;
+    }
 
-        if (!this.open)
+    public override void Draw()
+    {
+        if (!ImGui.BeginTabBar("tabs"))
         {
             return;
         }
 
-        ImGui.SetNextWindowSize(new Vector2(440, 520), ImGuiCond.FirstUseEver);
-        if (ImGui.Begin("Inverse Kinematics", ref this.open) && ImGui.BeginTabBar("tabs"))
-        {
-            this.Tab(0, "Feet", this.DrawFeet);
-            this.Tab(1, "Ankles", this.DrawAnkles);
-            this.Tab(2, "Edges", this.DrawEdges);
-            this.Tab(3, "Lean", this.DrawLean);
-            this.Tab(4, "Emotes", this.DrawEmotes);
-            this.Tab(5, "Status", this.DrawStatus);
-            ImGui.EndTabBar();
-        }
-
-        ImGui.End();
+        this.Tab(0, "Feet", this.DrawFeet);
+        this.Tab(1, "Ankles", this.DrawAnkles);
+        this.Tab(2, "Edges", this.DrawEdges);
+        this.Tab(3, "Lean", this.DrawLean);
+        this.Tab(4, "Emotes", this.DrawEmotes);
+        this.Tab(5, "Status", this.DrawStatus);
+        ImGui.EndTabBar();
     }
 
     private void Tab(int index, string name, Action body)
@@ -75,7 +70,7 @@ internal sealed class Overlay(Plugin plugin)
         // On release rather than on change: a drag would otherwise write the file every frame.
         if (ImGui.IsItemDeactivatedAfterEdit())
         {
-            plugin.SaveSettings();
+            this.plugin.SaveSettings();
         }
 
         Help(help);
@@ -90,7 +85,7 @@ internal sealed class Overlay(Plugin plugin)
         ImGui.SliderInt(label, ref v, min, max);
         if (ImGui.IsItemDeactivatedAfterEdit())
         {
-            plugin.SaveSettings();
+            this.plugin.SaveSettings();
         }
 
         Help(help);
@@ -100,7 +95,7 @@ internal sealed class Overlay(Plugin plugin)
     {
         if (ImGui.Checkbox(label, ref v))
         {
-            plugin.SaveSettings();
+            this.plugin.SaveSettings();
         }
     }
 
@@ -130,8 +125,8 @@ internal sealed class Overlay(Plugin plugin)
 
     private void DrawFeet()
     {
-        var c = plugin.Settings;
-        var L = plugin.Snap.LegLength;
+        var c = this.plugin.Settings;
+        var L = this.plugin.Snap.LegLength;
 
         this.Check("Enabled", ref c.Enabled);
         ImGui.TextDisabled($"Leg length {L:F2} m. Distances scale with it.");
@@ -182,8 +177,8 @@ internal sealed class Overlay(Plugin plugin)
 
     private void DrawAnkles()
     {
-        var c = plugin.Settings;
-        var L = plugin.Snap.LegLength;
+        var c = this.plugin.Settings;
+        var L = this.plugin.Snap.LegLength;
 
         Slider("Max tilt", ref c.MaxAnkleAngleDeg, 0f, 60f, "%.0f deg",
             "How far the foot may rotate to match the surface under it. Zero turns ankle alignment off.");
@@ -197,8 +192,8 @@ internal sealed class Overlay(Plugin plugin)
 
     private void DrawEdges()
     {
-        var c = plugin.Settings;
-        var L = plugin.Snap.LegLength;
+        var c = this.plugin.Settings;
+        var L = this.plugin.Snap.LegLength;
 
         this.Check("Gather feet", ref c.GatherFeet);
         ImGui.TextDisabled("Move your character's feet together when standing on narrow platforms to avoid them floating over an edge.");
@@ -226,7 +221,7 @@ internal sealed class Overlay(Plugin plugin)
 
     private void DrawLean()
     {
-        var c = plugin.Settings;
+        var c = this.plugin.Settings;
 
         this.Check("Lean into slopes", ref c.SlopeLean);
         Help("While moving, makes the character lean forwards or backwards when running uphill and downhill.");
@@ -253,7 +248,7 @@ internal sealed class Overlay(Plugin plugin)
 
     private void DrawEmotes()
     {
-        var c = plugin.Settings;
+        var c = this.plugin.Settings;
 
         this.Check("Work during emotes", ref c.Emotes);
         Help("Keeps placing the feet through dances and other looping emotes, and settles the body onto the slope when sitting or sleeping on the ground.");
@@ -358,10 +353,10 @@ internal sealed class Overlay(Plugin plugin)
 
     private static void Row(string name, bool left, bool right) => Row(name, left ? "yes" : "no", right ? "yes" : "no");
 
-    private void DrawWorldDots()
+    public void DrawWorldDots()
     {
-        ref var s = ref plugin.Snap;
-        if (!s.HasPose)
+        ref var s = ref this.plugin.Snap;
+        if (!this.plugin.Settings.ShowMarkers || !s.HasPose)
         {
             return;
         }
