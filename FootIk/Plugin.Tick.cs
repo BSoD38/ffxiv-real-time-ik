@@ -345,12 +345,15 @@ public sealed unsafe partial class Plugin
         }
 
         // A foot over ground a tread or more below the character is over a drop, unless the character is on an incline and
-        // that is simply where the slope or the stair puts a trailing foot: beside a rail or a curb it moves onto the level
-        // support like a foot over a void; on a hill it reaches for the ground as before.
-        var incline = (snap.Left.BelowLevel || snap.Right.BelowLevel) && this.OnIncline(in f);
+        // that is simply where the slope or the stair puts a leading foot: beside a rail or a curb it moves onto the level
+        // support like a foot over a void; on a hill it reaches for the ground as before. The exemption covers a foot far
+        // over a drop too: running downhill the leading foot swings out over ground well below any threshold, and gathering
+        // it back uphill every stride reads as a stumble. Only a foot over nothing at all gathers regardless.
+        var low = snap.Left.OverEdge || snap.Left.BelowLevel || snap.Right.OverEdge || snap.Right.BelowLevel;
+        var incline = low && (Sloped(in snap.Left) || Sloped(in snap.Right) || this.OnIncline(in f));
         Span<bool> needs = stackalloc bool[2];
-        needs[0] = snap.Left.OverEdge || (snap.Left.BelowLevel && !incline);
-        needs[1] = snap.Right.OverEdge || (snap.Right.BelowLevel && !incline);
+        needs[0] = !snap.Left.Hit || ((snap.Left.OverEdge || snap.Left.BelowLevel) && !incline);
+        needs[1] = !snap.Right.Hit || ((snap.Right.OverEdge || snap.Right.BelowLevel) && !incline);
         if (!needs[0] && !needs[1])
         {
             this.latched[0] = false;
@@ -497,6 +500,9 @@ public sealed unsafe partial class Plugin
             desired[s] = new Vector3(targetModel.X - foot.AnkleModel.X, 0f, targetModel.Z - foot.AnkleModel.Z);
         }
     }
+
+    // The hit triangle leans more than about ten degrees: a hill, a ramp, or a staircase whose collision is one.
+    private static bool Sloped(in FootSnapshot foot) => foot.Hit && foot.HitNormal.Y < 0.98f;
 
     // Up or down a stair or a slope, the ground half a leg ahead of the character and half a leg behind differ by more
     // than a tread. Along a rail or a curb they match, whether both land on the rail or both on the deck below it.
