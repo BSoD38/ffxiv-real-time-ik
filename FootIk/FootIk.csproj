@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+
+  <!-- DalamudPackager takes json > yaml > csproj, first hit wins with no merge: a FootIk.json beside this file
+       would silently replace every property below. -->
+  <PropertyGroup>
+    <Version>0.0.1.0</Version>
+    <Author>BSoD38</Author>
+    <Name>Inverse Kinematics</Name>
+    <Punchline>Plants your character's feet on the ground in real time.</Punchline>
+    <Description>Real-time inverse kinematics for your character. Bends the legs against the game's collision so the feet rest on slopes and steps instead of clipping through or floating, adjusts the body height to match, and leans into slopes while running.</Description>
+    <Tags>animation;ik;visual</Tags>
+    <RepoUrl>https://github.com/BSoD38/ffxiv-real-time-ik</RepoUrl>
+    <AcceptsFeedback>false</AcceptsFeedback>
+  </PropertyGroup>
+
+</Project>

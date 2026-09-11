@@ -1,0 +1,10 @@
+bin/
+obj/
+.vs/
+.idea/
+*.user
+!packages.lock.json
+
+# TRIPWIRE: a FootIk.json beside the csproj silently replaces every manifest property in it.
+FootIk/FootIk.json
+FootIk/FootIk.yaml
