@@ -11,7 +11,17 @@ public sealed unsafe partial class Plugin
     // bits are the best guess at what marks water; the see-through below stays harmless if a floor carries them too.
     private const ulong WaterMaterialBits = 0x1800;
 
-    private bool Raycast(Vector3 origin, out RaycastHit hit, float maxDist) => this.Raycast(origin, -Vector3.UnitY, out hit, maxDist);
+    // Straight down. The only rays the render mesh refines: a wall feeler wants the shape the character walks against.
+    private bool Raycast(Vector3 origin, out RaycastHit hit, float maxDist)
+    {
+        var ok = this.Raycast(origin, -Vector3.UnitY, out hit, maxDist);
+        if (ok && this.Settings.MeshRefine)
+        {
+            this.RefineByMesh(origin, ref hit);
+        }
+
+        return ok;
+    }
 
     private bool Raycast(Vector3 origin, Vector3 direction, out RaycastHit hit, float maxDist)
     {

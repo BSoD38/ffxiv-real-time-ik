@@ -144,6 +144,30 @@ public static class Solver
         return normal.Y > 0.2f ? hp.Y - (normal.X * (x - hp.X) + normal.Z * (z - hp.Z)) / normal.Y : hp.Y;
     }
 
+    // Height of the triangle at (x, z) when that point lies inside its footprint seen from above; false outside it, and
+    // for a triangle standing on edge.
+    public static bool TriangleHeight(Vector3 a, Vector3 b, Vector3 c, float x, float z, out float y)
+    {
+        y = 0f;
+        var d = ((b.Z - c.Z) * (a.X - c.X)) + ((c.X - b.X) * (a.Z - c.Z));
+        if (MathF.Abs(d) < 1e-9f)
+        {
+            return false;
+        }
+
+        var u = (((b.Z - c.Z) * (x - c.X)) + ((c.X - b.X) * (z - c.Z))) / d;
+        var v = (((c.Z - a.Z) * (x - c.X)) + ((a.X - c.X) * (z - c.Z))) / d;
+        var w = 1f - u - v;
+        const float slack = -1e-4f;
+        if (u < slack || v < slack || w < slack)
+        {
+            return false;
+        }
+
+        y = (u * a.Y) + (v * b.Y) + (w * c.Y);
+        return true;
+    }
+
     // Model-space turn that stands the body's up on the ground plane through four heights a radius out from the origin,
     // capped. Identity for level ground or a plane that could not be read.
     public static Quaternion GroundTilt(float ahead, float behind, float right, float left, float radius, Vector3 fwd, Vector3 side, Quaternion rot, float cap)
@@ -308,6 +332,13 @@ public static class Solver
         if (PlaneHeight(Vector3.One, Vector3.One, Vector3.One, new Vector3(0, 2, 0), 5f, 5f, out var flat) != 2f || flat != Vector3.Zero)
         {
             return "FAIL: degenerate triangle did not fall back to the hit point";
+        }
+
+        // The plane y = x + 2z through three corners: inside gives its height, a point past the hypotenuse is outside.
+        if (!TriangleHeight(new Vector3(0, 0, 0), new Vector3(2, 2, 0), new Vector3(0, 4, 2), 0.5f, 0.5f, out var th) || MathF.Abs(th - 1.5f) > 1e-5f
+            || TriangleHeight(new Vector3(0, 0, 0), new Vector3(2, 2, 0), new Vector3(0, 4, 2), 2f, 2f, out _))
+        {
+            return $"FAIL: triangle height {th:F4}";
         }
 
         var p = new Xf { T = new Vector3(1, 2, 3), R = Quaternion.CreateFromYawPitchRoll(0.3f, 0.2f, 0.1f), S = new Vector3(1, 2, 1) };

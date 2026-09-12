@@ -13,7 +13,7 @@ Product decisions that bound the design space (do not re-litigate):
 - **Distribution: self-hosted third-party repo**, csproj as the manifest. DalamudPluginsD17 review constraints are not binding.
 - **Never crash, at any cost in features.** Compatibility with CustomizePlus / SimpleHeels / Brio is a lower priority than not taking the client down.
 
-Milestone state (2026-09-11): M0–M4 and M5b done and in-game verified. M5 (stairs/ledges) partial — three probes per foot, median height; the slope sink is open and has a `SlopeLift` interim knob. M6 (sitting/emotes) is written and awaits in-game verification: `EmoteLoop` opens the gate, ground sit and sleep (`InPositionLoop`, `ModeParam` 1 and 3) tilt the whole pose to the ground plane. M7 (other characters + release) and M8 (render-mesh raycasting, experimental) are not started.
+Milestone state (2026-09-12): M0–M4 and M5b done and in-game verified. M5 (stairs/ledges) partial — three probes per foot, median height; the slope sink is open and has a `SlopeLift` interim knob. M6 (sitting/emotes) is written and awaits in-game verification: `EmoteLoop` opens the gate, ground sit and sleep (`InPositionLoop`, `ModeParam` 1 and 3) tilt the whole pose to the ground plane. M7 (other characters + release) is not started. M8 (render-mesh raycasting, experimental) is a hybrid in `Plugin.Mesh.cs`, in-game verified 2026-09-12, off by default: collision gates, the render mesh refines the height within a band.
 
 Load-bearing invariants:
 
@@ -47,6 +47,7 @@ FootIk/Plugin.Tick.cs     # the per-frame pass: a ref struct Frame threaded thro
 FootIk/Plugin.Gather.cs   # GatherFeet and its search: sampling, picking, holding, recentring
 FootIk/Plugin.Bones.cs    # ResolvePose (the guard chain), SolveLeg, ApplySpineLean, RotateBody
 FootIk/Plugin.Probes.cs   # Raycast (explicit layer/material filter), TrySupport, GroundAt
+FootIk/Plugin.Mesh.cs     # experimental: render-mesh ground height (layout scan, Lumina model cache, XZ grid, RefineByMesh)
 FootIk/Solver.cs          # pure math: Xf, Compose/Relative, FromTo, TwoBone, Pick, SelfTest
 FootIk/LegChain.cs        # bone lookup by name, subtrees, bind-pose rest / leg length / forward,
                           #   Havok transform read/write

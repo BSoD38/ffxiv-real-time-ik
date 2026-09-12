@@ -150,43 +150,43 @@ internal sealed class Overlay : Window
         ImGui.TextDisabled($"Leg length {L:F2} m. Distances scale with it.");
         ImGui.Spacing();
 
-        Slider("Max body drop", ref c.MaxDropFrac, 0f, 0.8f, $"%.2f  ({c.MaxDropFrac * L:F2} m)",
+        this.Slider("Max body drop", ref c.MaxDropFrac, 0f, 0.8f, $"%.2f  ({c.MaxDropFrac * L:F2} m)",
             "How far the body may sink toward a foot standing lower than the character. Low values may cause the lowest foot to hover above the ground. High values may cause unnatural poses.");
-        Slider("Max body rise", ref c.MaxPelvisRaiseFrac, 0f, 0.4f, $"%.2f  ({c.MaxPelvisRaiseFrac * L:F2} m)",
+        this.Slider("Max body rise", ref c.MaxPelvisRaiseFrac, 0f, 0.4f, $"%.2f  ({c.MaxPelvisRaiseFrac * L:F2} m)",
             "How far the body may rise when a foot stands higher than the character. Low values may cause the highest leg to bend too much. High values may cause unnatural poses.");
-        Slider("Max foot raise", ref c.MaxRaiseFrac, 0f, 0.8f, $"%.2f  ({c.MaxRaiseFrac * L:F2} m)",
+        this.Slider("Max foot raise", ref c.MaxRaiseFrac, 0f, 0.8f, $"%.2f  ({c.MaxRaiseFrac * L:F2} m)",
             "How far a foot may be lifted up. A foot that has to rise above this value will be underground. High values may cause unnatural poses.");
-        Slider("Edge drop", ref c.MaxStepDownFrac, 0.05f, 0.8f, $"%.2f  ({c.MaxStepDownFrac * L:F2} m)",
+        this.Slider("Edge drop", ref c.MaxStepDownFrac, 0.05f, 0.8f, $"%.2f  ({c.MaxStepDownFrac * L:F2} m)",
             "How far below the character a foot will reach for the ground. A foot over a bigger drop than this stays in place instead of stretching down.");
         this.Check("Keep feet out of walls", ref c.KeepFeetOutOfWalls);
         Help("Stops the feet from clipping into walls, kerbs and steps by moving them slightly aside. Works best when feet gathering is enabled.");
         if (c.KeepFeetOutOfWalls)
         {
-            Slider("Foot width", ref c.WallClearanceFrac, 0f, 0.2f, $"%.2f  ({c.WallClearanceFrac * 2f * L:F2} m wide)",
+            this.Slider("Foot width", ref c.WallClearanceFrac, 0f, 0.2f, $"%.2f  ({c.WallClearanceFrac * 2f * L:F2} m wide)",
                 "How wide the feet are considered to be when avoiding walls. Increase if the feet still clip into walls. Decrease if they stay too far away from them.");
         }
-        Slider("Straighten limit", ref c.StraightenLimit, 0.90f, 0.999f, "%.3f",
+        this.Slider("Straighten limit", ref c.StraightenLimit, 0.90f, 0.999f, "%.3f",
             "How far a leg can extend to reach its target. Helps races with hunched backs (e.g. male Hrothgar) more naturally place their feet.");
-        Slider("Max knee bend", ref c.MaxKneeBendDeg, 30f, 150f, "%.0f deg",
+        this.Slider("Max knee bend", ref c.MaxKneeBendDeg, 30f, 150f, "%.0f deg",
             "How far the knee may bend. Values that are too low may cause the highest foot to clip into the floor. Values that are too high may cause unnatural poses.");
-        Slider("Blend in/out", ref c.BlendSeconds, 0f, 1f, "%.2f s",
+        this.Slider("Blend in/out", ref c.BlendSeconds, 0f, 1f, "%.2f s",
             "Fade time when the effect turns on or off, such as mounting or entering a cutscene.");
-        Slider("Drop smoothing", ref c.PelvisTau, 0.01f, 0.5f, "%.2f s",
+        this.Slider("Drop smoothing", ref c.PelvisTau, 0.01f, 0.5f, "%.2f s",
             "Smoothing on the body height. Higher values will be smoother but might react late to floor height changes.");
 
         if (Advanced())
         {
-            Slider("Ignore ground beyond", ref c.MaxStepFrac, 0.1f, 1.2f, $"%.2f  ({c.MaxStepFrac * L:F2} m)",
+            this.Slider("Ignore ground beyond", ref c.MaxStepFrac, 0.1f, 1.2f, $"%.2f  ({c.MaxStepFrac * L:F2} m)",
                 "Ground further than this from standing height is not treated as a surface for that foot.");
-            Slider("Planted threshold", ref c.LiftThresholdFrac, 0.02f, 0.6f, $"%.2f  ({c.LiftThresholdFrac * L:F2} m)",
+            this.Slider("Planted threshold", ref c.LiftThresholdFrac, 0.02f, 0.6f, $"%.2f  ({c.LiftThresholdFrac * L:F2} m)",
                 "A foot within this height of its resting height carries full weight; weight fades to none at twice the distance.");
-            Slider("Probe start", ref c.RayUpFrac, 0.1f, 2f, $"%.2f  ({c.RayUpFrac * L:F2} m)",
+            this.Slider("Probe start", ref c.RayUpFrac, 0.1f, 2f, $"%.2f  ({c.RayUpFrac * L:F2} m)",
                 "How far above standing height the mod checks for floors. Must be high enough to correctly detect floors.");
-            Slider("Probe reach", ref c.RayDownFrac, 0.1f, 3f, $"%.2f  ({c.RayDownFrac * L:F2} m)",
+            this.Slider("Probe reach", ref c.RayDownFrac, 0.1f, 3f, $"%.2f  ({c.RayDownFrac * L:F2} m)",
                 "How far down the mod checks for ground before reporting nothing there.");
-            Slider("Rest adjust", ref c.RestAdjustFrac, -0.1f, 0.1f, $"%.3f  ({c.RestAdjustFrac * L:F3} m)",
+            this.Slider("Rest adjust", ref c.RestAdjustFrac, -0.1f, 0.1f, $"%.3f  ({c.RestAdjustFrac * L:F3} m)",
                 "Manual correction to the base height of the feet. Change when the feet seem always misplaced.");
-            Slider("Slope lift", ref c.SlopeLiftFrac, 0f, 0.5f, $"%.3f  ({c.SlopeLiftFrac * L:F3} m)",
+            this.Slider("Slope lift", ref c.SlopeLiftFrac, 0f, 0.5f, $"%.3f  ({c.SlopeLiftFrac * L:F3} m)",
                 "Extra foot raise proportional to how steep the ground is. Workaround to feet clipping slightly into the ground when standing on slopes.");
         }
     }
@@ -196,12 +196,12 @@ internal sealed class Overlay : Window
         var c = this.plugin.Settings;
         var L = this.plugin.Snap.LegLength;
 
-        Slider("Max tilt", ref c.MaxAnkleAngleDeg, 0f, 60f, "%.0f deg",
+        this.Slider("Max tilt", ref c.MaxAnkleAngleDeg, 0f, 60f, "%.0f deg",
             "How far the foot may rotate to match the surface under it. Zero turns ankle alignment off.");
 
         if (Advanced())
         {
-            Slider("Tilt fade", ref c.TiltFadeFrac, 0.01f, 0.3f, $"%.2f  ({c.TiltFadeFrac * L:F3} m)",
+            this.Slider("Tilt fade", ref c.TiltFadeFrac, 0.01f, 0.3f, $"%.2f  ({c.TiltFadeFrac * L:F3} m)",
                 "Tilt fades out over this height above resting height, so a lifting or heel-striking foot keeps the pose the animation gave it.");
         }
     }
@@ -219,11 +219,11 @@ internal sealed class Overlay : Window
         this.Check("Platforming mode", ref c.GatherToPosition);
         Help("Enabling this prioritises feet positions that avoid sliding your character off-centre. This helps better seeing where your character really is, at the cost of worse poses.");
         ImGui.Spacing();
-        Slider("Min stance", ref c.MinStanceFrac, 0.02f, 0.4f, $"%.2f  ({c.MinStanceFrac * L:F2} m)",
+        this.Slider("Min stance", ref c.MinStanceFrac, 0.02f, 0.4f, $"%.2f  ({c.MinStanceFrac * L:F2} m)",
             "How close the feet can be of each other when gathering. Avoids the feet crossing or overlapping each other.");
-        Slider("Straighten legs", ref c.GatherStraighten, 0f, 1f, "%.2f",
+        this.Slider("Straighten legs", ref c.GatherStraighten, 0f, 1f, "%.2f",
             "How much the legs straighten when the feet are gathered. Avoids legs being flexed while gathered on some races.");
-        Slider("Feet forward", ref c.GatherForward, 0f, 1f, "%.2f",
+        this.Slider("Feet forward", ref c.GatherForward, 0f, 1f, "%.2f",
             "How strongly the knees and feet turn to face forward when gathered. Avoids duck feet on some races.");
         this.SliderInt("Precision", ref c.GatherPrecision, 1, 4, $"%d  ({4 * c.GatherPrecision} directions)",
             "How carefully the plugin looks around each foot for ground to stand on. Higher finds narrow rails and beams more reliably and keeps the feet steadier, but costs more each frame. Lower it if the game slows down near edges.");
@@ -231,9 +231,9 @@ internal sealed class Overlay : Window
 
         if (Advanced())
         {
-            Slider("Ease in", ref c.GatherTauIn, 0.05f, 1f, "%.2f s",
+            this.Slider("Ease in", ref c.GatherTauIn, 0.05f, 1f, "%.2f s",
                 "How quickly the feet move in onto a support.");
-            Slider("Ease out", ref c.GatherTauOut, 0.05f, 1f, "%.2f s",
+            this.Slider("Ease out", ref c.GatherTauOut, 0.05f, 1f, "%.2f s",
                 "How quickly they return when stepping off.");
         }
     }
@@ -248,21 +248,21 @@ internal sealed class Overlay : Window
         ImGui.Spacing();
 
         ImGui.BeginDisabled(!c.SlopeLean);
-        Slider("Uphill gain", ref c.LeanUphillGain, 0f, 2f, "%.2f",
+        this.Slider("Uphill gain", ref c.LeanUphillGain, 0f, 2f, "%.2f",
             "How strongly the character leans forwards when running uphill, at full run speed.");
-        Slider("Downhill gain", ref c.LeanDownhillGain, 0f, 2f, "%.2f",
+        this.Slider("Downhill gain", ref c.LeanDownhillGain, 0f, 2f, "%.2f",
             "How far the character leans back when running downhill.");
-        Slider("Max lean", ref c.MaxLeanDeg, 0f, 45f, "%.0f deg",
+        this.Slider("Max lean", ref c.MaxLeanDeg, 0f, 45f, "%.0f deg",
             "How far the character can lean in either direction.");
         ImGui.EndDisabled();
 
         if (Advanced())
         {
-            Slider("Max spine pitch", ref c.MaxTotalPitchDeg, 10f, 90f, "%.0f deg",
+            this.Slider("Max spine pitch", ref c.MaxTotalPitchDeg, 10f, 90f, "%.0f deg",
                 "Limits how much the character may lean while taking account their base animations. Avoids hunched races lean forwards too much.");
-            Slider("Min spine pitch", ref c.MinTotalPitchDeg, -45f, 0f, "%.0f deg",
+            this.Slider("Min spine pitch", ref c.MinTotalPitchDeg, -45f, 0f, "%.0f deg",
                 "Limits how far back the character may lean, taking account of their base animation. Avoids upright races arching backwards when running downhill.");
-            Slider("Lean smoothing", ref c.LeanTau, 0.05f, 1f, "%.2f s",
+            this.Slider("Lean smoothing", ref c.LeanTau, 0.05f, 1f, "%.2f s",
                 "Smoothing on the lean angle, so a sudden change in terrain does not snap the torso.");
         }
     }
@@ -278,9 +278,9 @@ internal sealed class Overlay : Window
         ImGui.BeginDisabled(!c.Emotes);
         this.Check("Tilt lying-down poses too", ref c.FloorTilt);
         Help("Turns the body to follow the slope when lying on the ground, not just when sitting. Affects emotes like pushups and playing dead. Turn it off if the tilt reads worse than leaving the animation alone.");
-        Slider("Max sit tilt", ref c.MaxSitTiltDeg, 0f, 45f, "%.0f deg",
+        this.Slider("Max sit tilt", ref c.MaxSitTiltDeg, 0f, 45f, "%.0f deg",
             "How far the body may tilt to rest on sloped ground when sitting or sleeping on it. Zero keeps the body upright.");
-        Slider("Sit tilt smoothing", ref c.SitTiltTau, 0.05f, 1.5f, "%.2f s",
+        this.Slider("Sit tilt smoothing", ref c.SitTiltTau, 0.05f, 1.5f, "%.2f s",
             "How quickly the body settles onto the slope when sitting down, and comes back up when standing.");
         ImGui.EndDisabled();
     }
@@ -296,7 +296,7 @@ internal sealed class Overlay : Window
         ImGui.BeginDisabled(!c.Others);
         this.SliderInt("Max characters", ref c.MaxOthers, 1, 50, "%d",
             "How many characters to apply IK to. Lower this if your frame rate drops in crowds.");
-        Slider("Max distance", ref c.OthersRadius, 3f, 50f, "%.0f yalms",
+        this.Slider("Max distance", ref c.OthersRadius, 3f, 50f, "%.0f yalms",
             "How far away a character can be and still have its feet placed.");
         this.Combo("Apply IK to", ref c.Who, "Everyone\0Other players\0Friends and party\0Party only\0",
             "Which characters around you have IK applied. \"Everyone\" includes NPCs.");
@@ -307,6 +307,20 @@ internal sealed class Overlay : Window
         ImGui.EndDisabled();
         ImGui.EndDisabled();
 
+        Section("Ground");
+        this.Check("Use higher precision collision", ref c.MeshRefine);
+        Help("Places feet on the ground you actually see instead of the simplified shape the game uses for walking. Fixes stairs that otherwise behave like a ramp. Uses some memory, and a little frame time while a new area loads.");
+
+        if (Advanced())
+        {
+            ImGui.BeginDisabled(!c.MeshRefine);
+            this.Slider("Read distance", ref c.MeshRadius, 10f, 60f, "%.0f yalms",
+                "How far around you the visible ground is read. Keep it at least as far as Max distance above, or far-away characters fall back to the simple shape.");
+            this.Slider("Max difference", ref c.MeshBand, 0.05f, 1f, "%.2f m",
+                "How far the visible ground may be from the simple shape and still be believed. Too low and stairs are missed; too high and a foot may land on furniture.");
+            ImGui.EndDisabled();
+        }
+
         ImGui.Spacing();
         ImGui.TextDisabled($"Working on {this.plugin.Tracked} character{(this.plugin.Tracked == 1 ? string.Empty : "s")}.");
         ImGui.TextDisabled($"Frame cost {this.plugin.LastMicros:F0} us, max {this.plugin.MaxMicros:F0} us.");
@@ -314,87 +328,177 @@ internal sealed class Overlay : Window
 
     private void DrawStatus()
     {
-        var p = plugin;
+        var p = this.plugin;
+        var c = p.Settings;
         ref var s = ref p.Snap;
 
-        ImGui.TextUnformatted($"Render hook: {p.HookStatus}");
-        ImGui.TextUnformatted($"Move hook: {p.MoveHookStatus}");
-        ImGui.TextUnformatted($"Solver self-test: {p.SelfTest}");
-        ImGui.TextUnformatted($"Tick: {p.LastMicros:F0} us, max {p.MaxMicros:F0} us");
-        ImGui.TextUnformatted($"Faults: {p.Faults}  {(p.Tripped ? "TRIPPED" : "armed")}");
+        var hooked = p.HookStatus.StartsWith("hooked", StringComparison.Ordinal) && p.MoveHookStatus.StartsWith("hooked", StringComparison.Ordinal);
+        if (p.Tripped)
+        {
+            ImGui.TextWrapped($"Stopped after {p.Faults} errors. Everyone is back at the game's own height.");
+            if (ImGui.Button("Start again"))
+            {
+                p.Rearm();
+            }
+        }
+        else
+        {
+            ImGui.TextUnformatted(hooked && p.SelfTest == "PASS" ? "Running." : "Not running. See Details below.");
+        }
+
         if (p.LastError is not null)
         {
-            ImGui.TextUnformatted($"Last error: {p.LastError}");
+            ImGui.TextWrapped($"Last error: {p.LastError}");
         }
 
-        if (p.Tripped && ImGui.Button("Re-arm"))
-        {
-            p.Rearm();
-        }
+        ImGui.TextUnformatted($"Frame cost {p.LastMicros:F0} us, peak {p.MaxMicros:F0} us");
+        this.Check("Show markers in the world", ref c.ShowMarkers);
+        this.Check("Show a one-metre ruler at your feet", ref c.ShowRuler);
 
-        this.Check("Show markers in the world", ref p.Settings.ShowMarkers);
-
-        Section("State");
-        ImGui.TextUnformatted($"Gate {s.Gate}   blend {s.Blend:F2}   speed {s.Speed:F2} m/s");
-        ImGui.TextUnformatted($"Mode {s.Mode} ({s.ModeParam})   jumping {s.IsJumping}   gpose {s.GPose}");
-        ImGui.TextUnformatted($"Blocking condition {s.Conditions}");
-        // Peaks decay slowly so a value that only exists for a frame or two while walking can still be read off.
-        this.rawPeak = MathF.Max(this.rawPeak * 0.99f, MathF.Abs(s.RawDrop));
-        ImGui.TextUnformatted($"Body drop raw {s.RawDrop:F3}  smooth {s.SmoothDrop:F3}  applied {s.Applied:F3}");
-        ImGui.TextUnformatted($"Body drop peak {this.rawPeak:F3}");
-        this.lostPeak = MathF.Max(this.lostPeak * 0.99f, MathF.Abs(s.OffsetSeen - s.OffsetWritten));
-        ImGui.TextUnformatted($"Draw offset ours {s.OffsetWritten:F3}  game holds {s.OffsetSeen:F3}  lost peak {this.lostPeak:F3}");
-        if (ImGui.SmallButton("Reset peaks"))
-        {
-            this.rawPeak = 0f;
-            this.lostPeak = 0f;
-        }
-
-        ImGui.TextUnformatted($"Ground under body {s.BaseY:F3}");
-        ImGui.TextUnformatted($"Body shift {Fmt(s.BodyShift)}");
-        ImGui.TextUnformatted($"Spine pitch {s.SpinePitchDeg:F1} deg   lean {s.LeanDeg:F1} deg");
-        ImGui.TextUnformatted($"On the floor {s.OnFloor}   hips {s.HipFrac:F2}   body tilt {s.SitTiltDeg:F1} deg");
-        if (s.HasPose && !s.ChainResolved)
-        {
-            ImGui.TextUnformatted("Chain: not resolved (j_asi_[a,b,d,e]_[lr] missing)");
-        }
+        Section("Your character");
+        ImGui.TextUnformatted(Activity(in s, c.Enabled));
+        ImGui.TextUnformatted($"Body height {Cm(s.Applied)}   lean {s.LeanDeg:F0} deg   tilt to the ground {s.SitTiltDeg:F0} deg");
 
         Section("Feet");
-        if (!ImGui.BeginTable("feet", 3, ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerV))
-        {
-            return;
-        }
-
-        ImGui.TableSetupColumn(" ");
-        ImGui.TableSetupColumn("Left");
-        ImGui.TableSetupColumn("Right");
-        ImGui.TableHeadersRow();
-
         ref var l = ref s.Left;
         ref var r = ref s.Right;
-        Row("ground hit", l.Hit, r.Hit);
-        Row("state", State(in l), State(in r));
-        Row("ground Y", l.GroundModelY, r.GroundModelY, "F3");
-        Row("ankle above ground", l.AnkleAboveGround, r.AnkleAboveGround, "F3");
-        Row("rest (bind)", l.Rest, r.Rest, "F3");
-        Row("delta", l.Hit ? l.Rest - l.AnkleAboveGround : 0f, r.Hit ? r.Rest - r.AnkleAboveGround : 0f, "F3");
-        Row("planted", l.Planted, r.Planted, "F2");
-        Row("can extend", l.MaxExtend, r.MaxExtend, "F3");
-        Row("can raise", l.MaxRaiseByKnee, r.MaxRaiseByKnee, "F3");
-        Row("offset", l.Offset, r.Offset, "F3");
-        Row("contact", l.Contact, r.Contact, "F2");
-        Row("tilt", l.TiltDeg, r.TiltDeg, "F1");
-        Row("yaw", l.YawDeg, r.YawDeg, "F1");
-        Row("solved", l.Solved, r.Solved);
-        Row("gather shift", Fmt(l.GatherShift), Fmt(r.GatherShift));
-        Row("gather refused", l.GatherBlock.ToString(), r.GatherBlock.ToString());
-        Row("wall push", Fmt(l.WallShift), Fmt(r.WallShift));
-        Row("ankle (model)", Fmt(l.AnkleModel), Fmt(r.AnkleModel));
-        Row("ground point", Fmt(l.HitPoint), Fmt(r.HitPoint));
-        Row("ground normal", Fmt(l.HitNormal), Fmt(r.HitNormal));
-        Row("material", $"0x{l.Material:X}", $"0x{r.Material:X}");
-        ImGui.EndTable();
+        if (ImGui.BeginTable("feet", 3, ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerV))
+        {
+            ImGui.TableSetupColumn(" ");
+            ImGui.TableSetupColumn("Left");
+            ImGui.TableSetupColumn("Right");
+            ImGui.TableHeadersRow();
+            Row("standing", State(in l), State(in r));
+            Row("planted", $"{l.Planted:P0}", $"{r.Planted:P0}");
+            Row("height", Cm(l.Offset), Cm(r.Offset));
+            Row("tilt", $"{l.TiltDeg:F0} deg", $"{r.TiltDeg:F0} deg");
+            Row("moved", Cm((l.GatherShift + l.WallShift).Length()), Cm((r.GatherShift + r.WallShift).Length()));
+            ImGui.EndTable();
+        }
+
+        ImGui.Spacing();
+        if (ImGui.CollapsingHeader("Details"))
+        {
+            ImGui.TextUnformatted($"Render hook: {p.HookStatus}");
+            ImGui.TextUnformatted($"Move hook: {p.MoveHookStatus}");
+            ImGui.TextUnformatted($"Solver self-test: {p.SelfTest}");
+            ImGui.TextUnformatted($"Faults: {p.Faults}  {(p.Tripped ? "TRIPPED" : "armed")}");
+            ImGui.TextUnformatted($"Gate {s.Gate}   blend {s.Blend:F2}   speed {s.Speed:F2} m/s");
+            ImGui.TextUnformatted($"Mode {s.Mode} ({s.ModeParam})   jumping {s.IsJumping}   gpose {s.GPose}   blocking condition {s.Conditions}");
+            // Peaks decay slowly so a value that only exists for a frame or two while walking can still be read off.
+            this.rawPeak = MathF.Max(this.rawPeak * 0.99f, MathF.Abs(s.RawDrop));
+            ImGui.TextUnformatted($"Body drop raw {s.RawDrop:F3}  smooth {s.SmoothDrop:F3}  applied {s.Applied:F3}  peak {this.rawPeak:F3}");
+            this.lostPeak = MathF.Max(this.lostPeak * 0.99f, MathF.Abs(s.OffsetSeen - s.OffsetWritten));
+            ImGui.TextUnformatted($"Draw offset ours {s.OffsetWritten:F3}  game holds {s.OffsetSeen:F3}  lost peak {this.lostPeak:F3}");
+            if (ImGui.SmallButton("Reset peaks"))
+            {
+                this.rawPeak = 0f;
+                this.lostPeak = 0f;
+            }
+
+            ImGui.TextUnformatted($"Ground under body {s.BaseY:F3}   body shift {Fmt(s.BodyShift)}");
+            ImGui.TextUnformatted($"Spine pitch {s.SpinePitchDeg:F1} deg   lean {s.LeanDeg:F1} deg");
+            ImGui.TextUnformatted($"On the floor {s.OnFloor}   hips {s.HipFrac:F2}   body tilt {s.SitTiltDeg:F1} deg");
+            if (s.HasPose && !s.ChainResolved)
+            {
+                ImGui.TextUnformatted("Chain: not resolved (j_asi_[a,b,d,e]_[lr] missing)");
+            }
+
+            if (ImGui.BeginTable("feetdetail", 3, ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerV))
+            {
+                ImGui.TableSetupColumn(" ");
+                ImGui.TableSetupColumn("Left");
+                ImGui.TableSetupColumn("Right");
+                ImGui.TableHeadersRow();
+                Row("ground hit", l.Hit, r.Hit);
+                Row("ground Y", l.GroundModelY, r.GroundModelY, "F3");
+                Row("ankle above ground", l.AnkleAboveGround, r.AnkleAboveGround, "F3");
+                Row("rest (bind)", l.Rest, r.Rest, "F3");
+                Row("delta", l.Hit ? l.Rest - l.AnkleAboveGround : 0f, r.Hit ? r.Rest - r.AnkleAboveGround : 0f, "F3");
+                Row("planted", l.Planted, r.Planted, "F2");
+                Row("can extend", l.MaxExtend, r.MaxExtend, "F3");
+                Row("can raise", l.MaxRaiseByKnee, r.MaxRaiseByKnee, "F3");
+                Row("offset", l.Offset, r.Offset, "F3");
+                Row("contact", l.Contact, r.Contact, "F2");
+                Row("tilt", l.TiltDeg, r.TiltDeg, "F1");
+                Row("yaw", l.YawDeg, r.YawDeg, "F1");
+                Row("solved", l.Solved, r.Solved);
+                Row("gather shift", Fmt(l.GatherShift), Fmt(r.GatherShift));
+                Row("gather refused", l.GatherBlock.ToString(), r.GatherBlock.ToString());
+                Row("wall push", Fmt(l.WallShift), Fmt(r.WallShift));
+                Row("ankle (model)", Fmt(l.AnkleModel), Fmt(r.AnkleModel));
+                Row("ground point", Fmt(l.HitPoint), Fmt(r.HitPoint));
+                Row("ground normal", Fmt(l.HitNormal), Fmt(r.HitNormal));
+                Row("material", $"0x{l.Material:X}", $"0x{r.Material:X}");
+                ImGui.EndTable();
+            }
+        }
+
+        if (ImGui.CollapsingHeader("Higher precision collision"))
+        {
+            if (!c.MeshRefine)
+            {
+                ImGui.TextDisabled("Off. Turn it on from the Performance tab.");
+            }
+            else
+            {
+                ImGui.TextUnformatted(p.MeshStatus);
+                ImGui.TextUnformatted($"Parts {p.MeshParts}, with collider in range {p.MeshWithCollider}, terrain plates {p.MeshPlates}, unreadable {p.MeshFailed}");
+                ImGui.TextUnformatted($"Scan {p.MeshScanMs:F1} ms   build (worker) {p.MeshBuildMs:F1} ms, max {p.MeshBuildMaxMs:F1}");
+                ImGui.TextUnformatted($"Refined {p.MeshRefined}   missed {p.MeshMissed}   last delta {p.MeshLastDelta:+0.000;-0.000} m");
+                ImGui.TextUnformatted($"Rays this frame {p.MeshRaysPerFrame} over {p.MeshObjects} objects = {p.MeshRaysPerFrame * p.MeshObjects} bounds tests");
+                ImGui.TextWrapped($"Terrain plate: {p.MeshPlateSample}");
+                ImGui.Spacing();
+                ImGui.TextDisabled($"Parts within 6 m of you ({p.MeshOrigin.X:F1}, {p.MeshOrigin.Z:F1}). A centre far from the part you stand on means its placement is not world-space.");
+                foreach (var (_, line) in p.MeshNearby)
+                {
+                    ImGui.TextWrapped(line);
+                }
+            }
+        }
     }
+
+    private static string Activity(in Snapshot s, bool enabled)
+    {
+        if (!enabled)
+        {
+            return "Switched off.";
+        }
+
+        if (!s.HasPose)
+        {
+            return "No character to work on.";
+        }
+
+        if (s.GPose)
+        {
+            return "Paused in group pose.";
+        }
+
+        if (s.Conditions)
+        {
+            return "Paused: mounted, swimming, flying, in a cutscene or loading.";
+        }
+
+        if (s.IsJumping)
+        {
+            return "Paused while jumping.";
+        }
+
+        if (s.OnFloor)
+        {
+            return "Lying on the floor: only the body tilt applies.";
+        }
+
+        if (!s.Gate)
+        {
+            return $"Paused during {s.Mode}.";
+        }
+
+        return s.Blend < 0.99f ? $"Fading in, {s.Blend:P0}." : "Placing feet.";
+    }
+
+    private static string Cm(float metres) => $"{metres * 100f:+0;-0;0} cm";
 
     private static string State(in FootSnapshot f) => f.Gathered ? "gathered" : f.OverEdge ? "over edge" : "on ground";
 
@@ -417,14 +521,52 @@ internal sealed class Overlay : Window
     public void DrawWorldDots()
     {
         ref var s = ref this.plugin.Snap;
-        if (!this.plugin.Settings.ShowMarkers || !s.HasPose)
+        var c = this.plugin.Settings;
+        if (!s.HasPose || (!c.ShowMarkers && !c.ShowRuler))
         {
             return;
         }
 
         var dl = ImGui.GetBackgroundDrawList();
-        DrawFootDots(dl, in s.Left);
-        DrawFootDots(dl, in s.Right);
+        if (c.ShowMarkers)
+        {
+            DrawFootDots(dl, in s.Left);
+            DrawFootDots(dl, in s.Right);
+        }
+
+        if (c.ShowRuler)
+        {
+            DrawRuler(dl, in s);
+        }
+    }
+
+    // One metre along the character's right on the ground under the body and one metre up from it, a tick every ten centimetres.
+    private static void DrawRuler(ImDrawListPtr dl, in Snapshot s)
+    {
+        var side = new Vector3(MathF.Cos(s.Yaw), 0f, -MathF.Sin(s.Yaw));
+        DrawRuler(dl, s.Ground, side, Vector3.UnitY);
+        DrawRuler(dl, s.Ground, Vector3.UnitY, side);
+    }
+
+    private static void DrawRuler(ImDrawListPtr dl, Vector3 from, Vector3 along, Vector3 tick)
+    {
+        if (!Plugin.GameGui.WorldToScreen(from, out var a) || !Plugin.GameGui.WorldToScreen(from + along, out var b))
+        {
+            return;
+        }
+
+        dl.AddLine(a, b, 0xFFFFFFFF, 2f);
+        for (var i = 0; i <= 10; i++)
+        {
+            var p = from + (along * (0.1f * i));
+            var t = tick * (i % 5 == 0 ? 0.06f : 0.03f);
+            if (Plugin.GameGui.WorldToScreen(p, out var p0) && Plugin.GameGui.WorldToScreen(p + t, out var p1))
+            {
+                dl.AddLine(p0, p1, 0xFFFFFFFF, 2f);
+            }
+        }
+
+        dl.AddText(b + new Vector2(6f, -8f), 0xFFFFFFFF, "1 m");
     }
 
     private static void DrawFootDots(ImDrawListPtr dl, in FootSnapshot f)

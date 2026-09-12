@@ -29,14 +29,15 @@ public sealed unsafe partial class Plugin
             return;
         }
 
-        // A foot over ground a tread or more below the character is over a drop, unless it is on an incline, where that
-        // is just where a slope puts a leading foot; only a foot over nothing gathers regardless. `OnIncline` cannot
-        // tell a slope from a ledge, so it is asked only in motion; standing at an edge, the hit triangles decide.
-        var low = snap.Left.OverEdge || snap.Left.BelowLevel || snap.Right.OverEdge || snap.Right.BelowLevel;
-        var incline = low && (Sloped(in snap.Left) || Sloped(in snap.Right) || (!f.Still && this.OnIncline(in f)));
+        // A foot over a drop past Edge drop gathers, unless it is on an incline, where that is just where a slope puts a
+        // leading foot. A stride hangs one foot, never both, so two hanging feet gather whatever the ground below leans,
+        // and so does a foot over nothing. Ground within Edge drop is stood on, a stair tread included. `OnIncline`
+        // cannot tell a slope from a ledge, so it is asked only in motion; standing at an edge, the hit triangles decide.
+        var oneLow = snap.Left.OverEdge != snap.Right.OverEdge;
+        var incline = oneLow && (Sloped(in snap.Left) || Sloped(in snap.Right) || (!f.Still && this.OnIncline(in f)));
         Span<bool> needs = stackalloc bool[2];
-        needs[0] = !snap.Left.Hit || ((snap.Left.OverEdge || snap.Left.BelowLevel) && !incline);
-        needs[1] = !snap.Right.Hit || ((snap.Right.OverEdge || snap.Right.BelowLevel) && !incline);
+        needs[0] = !snap.Left.Hit || (snap.Left.OverEdge && !incline);
+        needs[1] = !snap.Right.Hit || (snap.Right.OverEdge && !incline);
         if (!needs[0] && !needs[1])
         {
             snap.Left.GatherBlock = Block.Settled;
@@ -132,6 +133,7 @@ public sealed unsafe partial class Plugin
         Span<Vector3> target = stackalloc Vector3[2];
         Span<bool> free = stackalloc bool[2];
         Span<bool> place = stackalloc bool[2];
+        Span<bool> narrow = stackalloc bool[2];
         for (var s = 0; s < 2; s++)
         {
             ref var foot = ref Foot(ref snap, s);
@@ -146,6 +148,9 @@ public sealed unsafe partial class Plugin
             var kept = i == 0 && (held[s] || !needs[s]);
             var at = (s * MaxSpots) + i;
             target[s] = spots[at];
+            // A kept spot carries no line, so it carries the answer it was latched with instead; recentring needs a real
+            // line, and a negative one would search along the character's facing from behind the ankle.
+            narrow[s] = kept ? f.St.LatchNarrow[s] : lines[at] >= 0;
             if (lines[at] >= 0 && this.Recentre(foot.AnkleWorld, lines[at], in f, level[s], out var mid))
             {
                 target[s] = mid;
@@ -184,6 +189,7 @@ public sealed unsafe partial class Plugin
             if (free[s])
             {
                 f.St.LatchTarget[s] = target[s];
+                f.St.LatchNarrow[s] = narrow[s];
                 f.St.Latched[s] = true;
             }
 
@@ -192,6 +198,12 @@ public sealed unsafe partial class Plugin
             foot.HitPoint = support.Point;
             foot.Material = support.Material;
             foot.GroundModelY = (GroundAt(in support, target[s].X, target[s].Z, out foot.HitNormal) - f.OriginY) / f.Scale.Y;
+            // A sole across a rail rests level: on a rounded or diamond rail the facet under one point is not what it stands on.
+            if (narrow[s])
+            {
+                foot.HitNormal = Vector3.UnitY;
+            }
+
             foot.Hit = true;
             foot.OverEdge = false;
             foot.Gathered = true;
@@ -334,7 +346,9 @@ public sealed unsafe partial class Plugin
 
                 spots[n] = spot;
                 costs[n] = cost;
-                lines[n] = !ok[k - 1] && !ok[k + 1] ? (d * 64) + k : -1;
+                var edgeNear = !ok[k - 1] || !ok[Math.Max(k - 2, 0)];
+                var edgeFar = !ok[k + 1] || !ok[Math.Min(k + 2, Steps + 1)];
+                lines[n] = edgeNear && edgeFar ? (d * 64) + k : -1;
                 n++;
             }
         }
@@ -342,15 +356,18 @@ public sealed unsafe partial class Plugin
         return n;
     }
 
-    // A sample with no standable neighbour on its line stands on something narrower than the spacing, a guardrail for
-    // one, and may sit at its very edge. Find both edges and stand in the middle.
+    // A sample with an edge within two steps on each side along its line stands on something about a boot wide or
+    // narrower, a guardrail for one, and may sit at its very edge or on one flank of a rounded rail. Find both edges
+    // and stand in the middle.
     private bool Recentre(Vector3 ankle, int line, in Frame f, bool level, out Vector3 mid)
     {
         var dir = this.SearchDir(line, in f);
         var step = f.Reach / Steps;
         var k = line % 64;
-        var near = this.Edge(ankle, dir, step * (k - 1), step * k, in f, level);
-        var far = this.Edge(ankle, dir, step * (k + 1), step * k, in f, level);
+        var lo = this.TrySupport(ankle + (dir * (step * (k - 1))), in f, level, out _) ? k - 1 : k;
+        var hi = this.TrySupport(ankle + (dir * (step * (k + 1))), in f, level, out _) ? k + 1 : k;
+        var near = this.Edge(ankle, dir, step * (lo - 1), step * lo, in f, level);
+        var far = this.Edge(ankle, dir, step * (hi + 1), step * hi, in f, level);
         mid = ankle + (dir * ((near + far) * 0.5f));
         return this.TrySupport(mid, in f, level, out _);
     }

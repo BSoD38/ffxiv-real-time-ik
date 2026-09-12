@@ -28,7 +28,6 @@ public struct FootSnapshot
     public float GroundModelY;
     public float AnkleAboveGround;
     public bool OverEdge;
-    public bool BelowLevel; // ground a step or more below the level the character stands on
     public bool Gathered;
     public Vector3 GatherShift;
     public Vector3 WallShift;
@@ -62,6 +61,8 @@ public struct Snapshot
     public float HipFrac;
     public float LegLength;
     public float BaseY;
+    public Vector3 Ground; // world space, under the body
+    public float Yaw;
     public float RawDrop;
     public float SmoothDrop;
     public float Applied;

@@ -34,6 +34,7 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
     [PluginService] internal static ICondition           Condition   { get; private set; } = null!;
     [PluginService] internal static IClientState         ClientState { get; private set; } = null!;
     [PluginService] internal static IGameGui             GameGui     { get; private set; } = null!;
+    [PluginService] internal static IDataManager         Data        { get; private set; } = null!;
     [PluginService] internal static ICommandManager      Commands    { get; private set; } = null!;
 
     public Settings Settings { get; }
@@ -108,6 +109,7 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
         this.windows.AddWindow(this.overlay);
         PluginInterface.UiBuilder.Draw += this.windows.Draw;
         PluginInterface.UiBuilder.Draw += this.overlay.DrawWorldDots;
+        PluginInterface.UiBuilder.Draw += this.UpdateMesh;
         PluginInterface.UiBuilder.OpenMainUi += this.overlay.Toggle;
         PluginInterface.UiBuilder.OpenConfigUi += this.overlay.Toggle;
         Commands.AddHandler("/ik", new CommandInfo((_, _) => this.overlay.Toggle()) { HelpMessage = "Toggle the Inverse Kinematics window." });
@@ -295,6 +297,8 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
         Commands.RemoveHandler("/ik");
         PluginInterface.UiBuilder.Draw -= this.windows.Draw;
         PluginInterface.UiBuilder.Draw -= this.overlay.DrawWorldDots;
+        PluginInterface.UiBuilder.Draw -= this.UpdateMesh;
+        this.DisposeMesh();
         this.windows.RemoveAllWindows();
         PluginInterface.UiBuilder.OpenMainUi -= this.overlay.Toggle;
         PluginInterface.UiBuilder.OpenConfigUi -= this.overlay.Toggle;

@@ -108,6 +108,10 @@ public sealed unsafe partial class Plugin
         if (poseOk)
         {
             this.ReadTransform(chr, ref f);
+            // Written here rather than under the gate: the overlay draws the ruler from these, and a snapshot is blank
+            // every tick, so leaving them to the gated path puts the ruler at the world origin whenever it is shut.
+            snap.Yaw = f.Yaw;
+            snap.Ground = new Vector3(f.PosAnchor.X, f.OriginY, f.PosAnchor.Z);
             var hips = (Bones.Pos(in f.Bones[st.Chain.Left.Hip]).Y + Bones.Pos(in f.Bones[st.Chain.Right.Hip]).Y) * 0.5f;
             st.HipFrac = hips / f.LegLen;
             snap.HipFrac = st.HipFrac;
@@ -120,6 +124,7 @@ public sealed unsafe partial class Plugin
             if (mode != CharacterModes.Normal)
             {
                 this.ProbeBase(ref f);
+                snap.Ground.Y = f.OriginY + (f.BaseY * f.Scale.Y);
             }
 
             snap.BaseY = f.BaseY;
@@ -352,7 +357,6 @@ public sealed unsafe partial class Plugin
         // Evaluated at the ankle's XZ rather than at the winning probe: on a slope the mid-foot probe is half a foot away.
         foot.GroundModelY = (GroundAt(in chosen, foot.AnkleWorld.X, foot.AnkleWorld.Z, out foot.HitNormal) - f.OriginY) / f.Scale.Y;
         foot.OverEdge = foot.GroundModelY - f.BaseY < -f.MaxStepDown;
-        foot.BelowLevel = foot.GroundModelY - f.BaseY < -f.StepTol;
     }
 
     private void ArrangeStance(ref Frame f, ref Snapshot snap, scoped Span<Vector3> desired, out Vector3 bodyDesired)

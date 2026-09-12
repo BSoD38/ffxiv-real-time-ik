@@ -20,6 +20,7 @@ public sealed class Settings : IPluginConfiguration
 
     public bool Enabled = true;
     public bool ShowMarkers;
+    public bool ShowRuler;
     public float BlendSeconds = 0.15f;
     public float PelvisTau = 0.08f;
 
@@ -68,6 +69,10 @@ public sealed class Settings : IPluginConfiguration
     public int MaxOthers = 4;
     public Who Who;
     public float OthersRadius = 15f; // yalms from the local player, not a body-relative distance
+
+    public bool MeshRefine; // experimental: the ground height read off the visible level geometry, gated by collision
+    public float MeshRadius = 30f; // yalms around the local player that are read, a world distance like OthersRadius
+    public float MeshBand = 0.35f; // metres the visible ground may differ from collision and still be believed: about a tall stair tread, a property of the level rather than the character
 
     // A truncated or hand-edited file can deserialise a NaN, and every comparison against NaN is false, so the guards
     // downstream let it through as "not too far". Reflection so a field added later is covered.
