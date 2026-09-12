@@ -58,13 +58,18 @@ public struct Snapshot
     public float Speed;
     public float LeanDeg;
     public float SpinePitchDeg;
-    public bool Sitting;
+    public bool OnFloor;
     public float SitTiltDeg;
+    public float HipFrac;
+    public bool ArmsResolved;
+    public float LeftHandY, RightHandY;    // wrist height over the ground under it, model units; NaN when nothing is under it
     public float LegLength;
     public float BaseY;
     public float RawDrop;
     public float SmoothDrop;
     public float Applied;
+    public float OffsetSeen;
+    public float OffsetWritten;
     public Vector3 BodyShift;
     public FootSnapshot Left;
     public FootSnapshot Right;

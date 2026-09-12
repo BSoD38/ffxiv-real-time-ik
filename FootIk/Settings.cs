@@ -63,6 +63,7 @@ public sealed class Settings : IPluginConfiguration
 
     public bool Emotes = true;
     public float MaxSitTiltDeg = 20f;
+    public bool FloorTilt = true;
     public float SitTiltTau = 0.4f;
 
     public bool Others;

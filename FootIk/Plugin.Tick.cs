@@ -42,6 +42,11 @@ public sealed unsafe partial class Plugin
         public float GatherWant;
     }
 
+    // Hip height over leg length: below FloorHips the character is on the floor rather than on its feet, and above
+    // StandingHips it is clearly back on them. The Status tab reads it out; an idle pose measured over 0.85 in game.
+    private const float FloorHips = 0.4f;
+    private const float StandingHips = 0.85f;
+
     // retire closes the gate whatever the character is doing, so the blend carries our offsets back off it.
     private void TickOne(Character* chr, CharState st, float dt, double rawDt, bool local, bool retire, ref Snapshot snap)
     {
@@ -54,10 +59,26 @@ public sealed unsafe partial class Plugin
         snap.Conditions = Condition.Any(this.globalFlags) || (local && Condition.Any(this.gateFlags));
         // MovementState is the per-character reading of what ICondition tells us about ourselves: flying and diving.
         var clear = c.Enabled && !retire && !snap.Conditions && !snap.GPose && chr->MoveController.MovementState == MovementStateOptions.Normal;
-        // EmoteLoop is every standing loop (dances, /lean, /playdead). Sitting on the ground, on a chair and sleeping are
-        // InPositionLoop with the EmoteMode row in ModeParam: 1 ground, 2 chair, 3 sleep. A chair is furniture, not ground.
-        snap.Gate = clear && !snap.IsJumping && (mode == CharacterModes.Normal || (c.Emotes && mode == CharacterModes.EmoteLoop));
-        snap.Sitting = clear && c.Emotes && mode == CharacterModes.InPositionLoop && chr->ModeParam is 1 or 3;
+        // Sitting on the ground, on a chair and sleeping are InPositionLoop with the EmoteMode row in ModeParam: 1
+        // ground, 2 chair, 3 sleep. A chair is furniture, not ground. Everything else that loops is EmoteLoop, a dance
+        // and /pushups alike, and nothing in the sheet tells those apart, so the hips do: down there the legs carry
+        // nothing, and the standing pass read them as planted feet asking the body up or down, which floated /pushups and
+        // sank /situps. The hips are last frame's, the pose not being resolved yet here, and the blend is many frames
+        // long, so the lag does not show.
+        // Latched low and released high. /pushups swings the hips up and down through any single threshold every rep, and
+        // a gate flapping with it would fade the legs in and out; the emote's mode flips back the frame the get-up
+        // animation starts, while the character is still down there, so that cannot be the release either.
+        if (mode == CharacterModes.EmoteLoop && st.HipFrac < FloorHips)
+        {
+            st.FloorLoop = true;
+        }
+        else if (st.HipFrac >= StandingHips)
+        {
+            st.FloorLoop = false;
+        }
+
+        snap.OnFloor = clear && c.Emotes && ((mode == CharacterModes.InPositionLoop && chr->ModeParam is 1 or 3) || st.FloorLoop);
+        snap.Gate = clear && !snap.IsJumping && !snap.OnFloor && (mode == CharacterModes.Normal || (c.Emotes && mode == CharacterModes.EmoteLoop));
 
         // A zero component in the skeleton scale turns every model-space conversion below into infinity, and SmoothDrop
         // and BodyShift hold a NaN forever once one reaches them.
@@ -94,6 +115,9 @@ public sealed unsafe partial class Plugin
         if (poseOk)
         {
             this.ReadTransform(chr, ref f);
+            var hips = (Bones.Pos(in f.Bones[st.Chain.Left.Hip]).Y + Bones.Pos(in f.Bones[st.Chain.Right.Hip]).Y) * 0.5f;
+            st.HipFrac = hips / f.LegLen;
+            snap.HipFrac = st.HipFrac;
         }
 
         if (active)
@@ -106,6 +130,7 @@ public sealed unsafe partial class Plugin
             }
 
             snap.BaseY = f.BaseY;
+            this.ProbeHands(ref f, ref snap);
             Span<Vector3> desired = stackalloc Vector3[2];
             this.ProbeFoot(ref f, 0, ref snap.Left);
             this.ProbeFoot(ref f, 1, ref snap.Right);
@@ -150,6 +175,8 @@ public sealed unsafe partial class Plugin
         // Blended like the drop is: without that factor, closing the gate leaves the body shifted sideways for good.
         var bodyWorld = active ? Vector3.Transform(f.Scale * st.BodyShift, f.Rot) * st.Blend : Vector3.Zero;
         this.ApplyPelvis(chr, st, new Vector3(bodyWorld.X, applied, bodyWorld.Z));
+        snap.OffsetSeen = st.SeenOffsetY;
+        snap.OffsetWritten = st.Written;
 
         if (active && st.Blend > 0)
         {
@@ -198,6 +225,104 @@ public sealed unsafe partial class Plugin
         // Gather search radius, not tied to the stance: a smaller minimum stance must bring the feet closer, not shorten
         // the search. Wide enough for the far ankle of a character standing at the very edge of its collision capsule.
         f.Reach = 0.85f * f.LegLen * f.Scale.Y;
+    }
+
+    // Read-only: how far each wrist sits above the ground under it. Kept because it answered two questions worth keeping
+    // answered: the arm bone names resolve on a real skeleton, and the /pushups animation plants both wrists exactly on
+    // the ground plane and holds them there through the reps (0.000 on the flat, measured in game), so a hand needs no
+    // bind-pose rest height the way a sole does. Only on the floor, so it costs two rays on a pose nobody holds for long.
+    private void ProbeHands(ref Frame f, ref Snapshot snap)
+    {
+        snap.ArmsResolved = f.St.Chain.LeftArm.Resolved && f.St.Chain.RightArm.Resolved;
+        snap.LeftHandY = float.NaN;
+        snap.RightHandY = float.NaN;
+        if (!snap.OnFloor || !snap.ArmsResolved)
+        {
+            return;
+        }
+
+        for (var s = 0; s < 2; s++)
+        {
+            var arm = s == 0 ? f.St.Chain.LeftArm : f.St.Chain.RightArm;
+            var world = f.PosAnchor + Vector3.Transform(f.Scale * Bones.Pos(in f.Bones[arm.Ankle]), f.Rot);
+            if (!this.TryGround(world, in f, out _, out var groundY))
+            {
+                continue;
+            }
+
+            var above = (world.Y - groundY) / f.Scale.Y;
+            if (s == 0)
+            {
+                snap.LeftHandY = above;
+            }
+            else
+            {
+                snap.RightHandY = above;
+            }
+        }
+    }
+
+    // The ground orientation a prone body actually rests on, fitted to where it touches rather than to four probes half a
+    // leg out from the origin: those sample ground beside the torso, which on broken terrain is not the ground the
+    // character is lying on at all. Pitch comes from the hands against the toes over the body's length, roll from the
+    // right contacts against the left over its width, each contact weighted by how near the ground it already is, so one
+    // held in the air - the hands behind the head in /situps - drops out of the fit instead of dragging it. An axis with
+    // nothing to measure stays flat rather than guessing. GroundTilt's four heights and radius reduce to those two
+    // slopes, so it does the rest: the normal, the cap, and every finite check.
+    private bool ContactTilt(ref Frame f, Vector3 fwd, Vector3 side, float cap, out Quaternion tilt)
+    {
+        tilt = Quaternion.Identity;
+        if (!f.St.Chain.LeftArm.Resolved || !f.St.Chain.RightArm.Resolved)
+        {
+            return false;
+        }
+
+        Span<int> bones = [f.St.Chain.LeftArm.Ankle, f.St.Chain.RightArm.Ankle, f.St.Chain.Left.Toes, f.St.Chain.Right.Toes];
+        Span<Vector3> at = stackalloc Vector3[4];
+        Span<float> ground = stackalloc float[4];
+        Span<float> weight = stackalloc float[4];
+        for (var i = 0; i < 4; i++)
+        {
+            at[i] = f.PosAnchor + Vector3.Transform(f.Scale * Bones.Pos(in f.Bones[bones[i]]), f.Rot);
+            weight[i] = 0f;
+            if (!this.TryGround(at[i], in f, out _, out var g))
+            {
+                continue;
+            }
+
+            ground[i] = g;
+            weight[i] = Math.Clamp(1f - (MathF.Abs((at[i].Y - g) / f.Scale.Y) / f.StepTol), 0f, 1f);
+        }
+
+        // Hands against toes, then right against left. Both groups of a pair must have something planted in them, or that
+        // axis has no baseline to measure a slope over.
+        var slopeFwd = Slope(at, ground, weight, 0, 1, 2, 3, fwd, in f);
+        var slopeSide = Slope(at, ground, weight, 1, 3, 0, 2, side, in f);
+        if (slopeFwd == 0f && slopeSide == 0f)
+        {
+            return false;
+        }
+
+        tilt = Solver.GroundTilt(slopeFwd, 0f, slopeSide, 0f, 0.5f, fwd, side, f.Rot, cap);
+        return true;
+    }
+
+    // Ground rise per unit along `axis`, between the weighted centre of one pair of contacts and the other's.
+    private static float Slope(scoped ReadOnlySpan<Vector3> at, scoped ReadOnlySpan<float> ground, scoped ReadOnlySpan<float> weight, int a1, int a2, int b1, int b2, Vector3 axis, in Frame f)
+    {
+        var wa = weight[a1] + weight[a2];
+        var wb = weight[b1] + weight[b2];
+        if (wa < 1e-3f || wb < 1e-3f)
+        {
+            return 0f;
+        }
+
+        var pa = ((at[a1] * weight[a1]) + (at[a2] * weight[a2])) / wa;
+        var pb = ((at[b1] * weight[b1]) + (at[b2] * weight[b2])) / wb;
+        var ga = ((ground[a1] * weight[a1]) + (ground[a2] * weight[a2])) / wa;
+        var gb = ((ground[b1] * weight[b1]) + (ground[b2] * weight[b2])) / wb;
+        var span = Vector3.Dot(pa - pb, axis);
+        return MathF.Abs(span) < 0.1f * f.LegLen * f.Scale.Y ? 0f : (ga - gb) / span;
     }
 
     // The ground under the body itself, the baseline for every step threshold and for the probe window. An animation
@@ -533,27 +658,43 @@ public sealed unsafe partial class Plugin
     // Seated on the ground the body rests on the slope instead of standing on it: the whole pose turns about the origin
     // so its up matches the ground plane, read from four probes half a leg length out. Weighted by how far down the body
     // is, since the sit-down animation starts upright and an upright body tilted to the slope reads as falling over.
+    // Open just below standing, or a character still on its feet tilts, and full where the legs switch off, so the tilt
+    // rides the sit-down animation down instead of arriving after it. Pinned full while a floor emote is actually
+    // running, or a rep of /pushups would swing the tilt with the hips; once it ends the ramp takes over again and the
+    // tilt leaves with the body on the way up.
+    private static float Low(in Frame f, in Snapshot snap) => f.St.FloorLoop && snap.Mode == CharacterModes.EmoteLoop
+        ? 1f
+        : Math.Clamp((StandingHips - f.St.HipFrac) / (StandingHips - FloorHips), 0f, 1f);
+
     private void TiltBody(ref Frame f, ref Snapshot snap, bool poseOk)
     {
         var c = this.Settings;
         var target = Quaternion.Identity;
-        if (poseOk && snap.Sitting && c.MaxSitTiltDeg > 0f)
+        // Sitting always, lying down by choice: the ground plane comes from four probes half a leg out from the origin,
+        // which for a prone body samples ground beside the torso rather than under the hands and toes it rests on.
+        if (poseOk && snap.OnFloor && c.MaxSitTiltDeg > 0f && (c.FloorTilt || !f.St.FloorLoop))
         {
             var r = 0.5f * f.LegLen * f.Scale.Y;
             var fwd = new Vector3(MathF.Sin(f.Yaw), 0f, MathF.Cos(f.Yaw));
             var side = new Vector3(fwd.Z, 0f, -fwd.X);
-            if (this.TryGround(f.PosAnchor + (fwd * r), in f, out _, out var ahead) && this.TryGround(f.PosAnchor - (fwd * r), in f, out _, out var behind)
+            var cap = c.MaxSitTiltDeg * MathF.PI / 180f;
+            // A prone body is fitted to what it lies on; a seated one has its contacts under itself, where the four
+            // probes around the origin already sample the right ground.
+            if (f.St.FloorLoop && this.ContactTilt(ref f, fwd, side, cap, out var fitted))
+            {
+                target = Quaternion.Slerp(Quaternion.Identity, fitted, Low(in f, in snap));
+            }
+            else if (this.TryGround(f.PosAnchor + (fwd * r), in f, out _, out var ahead) && this.TryGround(f.PosAnchor - (fwd * r), in f, out _, out var behind)
                 && this.TryGround(f.PosAnchor + (side * r), in f, out _, out var right) && this.TryGround(f.PosAnchor - (side * r), in f, out _, out var left))
             {
-                var hipY = (Bones.Pos(in f.Bones[f.St.Chain.Left.Hip]).Y + Bones.Pos(in f.Bones[f.St.Chain.Right.Hip]).Y) * 0.5f;
-                var low = Math.Clamp((0.5f * f.LegLen - hipY) / (0.25f * f.LegLen), 0f, 1f);
-                var full = Solver.GroundTilt(ahead, behind, right, left, r, fwd, side, f.Rot, c.MaxSitTiltDeg * MathF.PI / 180f);
-                target = Quaternion.Slerp(Quaternion.Identity, full, low);
+                var full = Solver.GroundTilt(ahead, behind, right, left, r, fwd, side, f.Rot, cap);
+                target = Quaternion.Slerp(Quaternion.Identity, full, Low(in f, in snap));
             }
         }
 
         f.St.Tilt = Quaternion.Slerp(f.St.Tilt, target, Ease(f.Dt, c.SitTiltTau));
         snap.SitTiltDeg = 2f * MathF.Acos(MathF.Min(MathF.Abs(f.St.Tilt.W), 1f)) * 180f / MathF.PI;
+
         if (poseOk && snap.SitTiltDeg > 0.05f)
         {
             RotateBody(f.Skel, f.Pose, f.St.Tilt);

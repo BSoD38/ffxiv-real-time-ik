@@ -17,6 +17,8 @@ internal sealed class Overlay : Window
     // which keeps them aligned without every call site repeating its label.
     private readonly float[] labelReserve = new float[7];
     private int tab;
+    private float rawPeak;
+    private float lostPeak;
     private float labelMax;
 
     public Overlay(Plugin plugin) : base("Inverse Kinematics")
@@ -275,6 +277,8 @@ internal sealed class Overlay : Window
         ImGui.Spacing();
 
         ImGui.BeginDisabled(!c.Emotes);
+        this.Check("Tilt lying-down poses too", ref c.FloorTilt);
+        Help("Turns the body to follow the slope when lying on the ground, not just when sitting. Affects emotes like pushups and playing dead. Turn it off if the tilt reads worse than leaving the animation alone.");
         Slider("Max sit tilt", ref c.MaxSitTiltDeg, 0f, 45f, "%.0f deg",
             "How far the body may tilt to rest on sloped ground when sitting or sleeping on it. Zero keeps the body upright.");
         Slider("Sit tilt smoothing", ref c.SitTiltTau, 0.05f, 1.5f, "%.2f s",
@@ -335,11 +339,23 @@ internal sealed class Overlay : Window
         ImGui.TextUnformatted($"Gate {s.Gate}   blend {s.Blend:F2}   speed {s.Speed:F2} m/s");
         ImGui.TextUnformatted($"Mode {s.Mode} ({s.ModeParam})   jumping {s.IsJumping}   gpose {s.GPose}");
         ImGui.TextUnformatted($"Blocking condition {s.Conditions}");
+        // Peaks decay slowly so a value that only exists for a frame or two while walking can still be read off.
+        this.rawPeak = MathF.Max(this.rawPeak * 0.99f, MathF.Abs(s.RawDrop));
         ImGui.TextUnformatted($"Body drop raw {s.RawDrop:F3}  smooth {s.SmoothDrop:F3}  applied {s.Applied:F3}");
+        ImGui.TextUnformatted($"Body drop peak {this.rawPeak:F3}");
+        this.lostPeak = MathF.Max(this.lostPeak * 0.99f, MathF.Abs(s.OffsetSeen - s.OffsetWritten));
+        ImGui.TextUnformatted(OffsetLine(in s, this.lostPeak));
+        if (ImGui.SmallButton("Reset peaks"))
+        {
+            this.rawPeak = 0f;
+            this.lostPeak = 0f;
+        }
+
         ImGui.TextUnformatted($"Ground under body {s.BaseY:F3}");
         ImGui.TextUnformatted($"Body shift {Fmt(s.BodyShift)}");
         ImGui.TextUnformatted($"Spine pitch {s.SpinePitchDeg:F1} deg   lean {s.LeanDeg:F1} deg");
-        ImGui.TextUnformatted($"Sitting {s.Sitting}   body tilt {s.SitTiltDeg:F1} deg");
+        ImGui.TextUnformatted($"On the floor {s.OnFloor}   hips {s.HipFrac:F2}   body tilt {s.SitTiltDeg:F1} deg");
+        ImGui.TextUnformatted($"Arms resolved {s.ArmsResolved}   hand over ground L {s.LeftHandY:F3}  R {s.RightHandY:F3}");
         if (s.HasPose && !s.ChainResolved)
         {
             ImGui.TextUnformatted("Chain: not resolved (j_asi_[a,b,d,e]_[lr] missing)");
@@ -430,6 +446,8 @@ internal sealed class Overlay : Window
             dl.AddLine(g, n, 0xFFFFFF00, 2f);
         }
     }
+
+    private static string OffsetLine(in Snapshot s, float lost) => $"Draw offset ours {s.OffsetWritten:F3}  game holds {s.OffsetSeen:F3}  lost peak {lost:F3}";
 
     private static string Fmt(Vector3 v) => $"{v.X:F2}, {v.Y:F2}, {v.Z:F2}";
 }

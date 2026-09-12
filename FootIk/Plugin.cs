@@ -241,12 +241,23 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
             return;
         }
 
-        if (total.Y != st.Written)
+        // The game clears DrawOffset whenever it moves a character, and a stair step is exactly that, so our share goes
+        // with it (2026-09-11, measured in game: the field read zero while we believed a tread was applied). A write made
+        // only when our own target changes is therefore never re-asserted, and the body drop we worked out is lost for as
+        // long as it stays constant - which is most of a climb. So: work out what the field holds besides us, put ours
+        // back on top of that, and do it whenever the field is not already what it should be. Still only ever our own
+        // share, so SimpleHeels and friends keep theirs; a cleared field simply has nobody's in it any more.
+        ref var off = ref chr->GameObject.DrawOffset;
+        var held = off.Y;
+        st.SeenOffsetY = held;
+        var others = MathF.Abs(held) < 1e-6f && st.Written != 0f ? 0f : held - st.Written;
+        var wanted = others + total.Y;
+        if (MathF.Abs(wanted - held) > 1e-6f)
         {
-            ref var off = ref chr->GameObject.DrawOffset;
-            chr->GameObject.SetDrawOffset(off.X, off.Y + (total.Y - st.Written), off.Z);
-            st.Written = total.Y;
+            chr->GameObject.SetDrawOffset(off.X, wanted, off.Z);
         }
+
+        st.Written = total.Y;
 
         st.PelvisForMove = this.moveHook == null ? Vector3.Zero : new Vector3(total.X, 0f, total.Z);
     }

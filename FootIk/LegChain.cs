@@ -31,6 +31,8 @@ internal static class Bones
     }
 }
 
+// Also holds an arm, which is the same three-joint shape and so needs no second solver: j_ude_a as the hip, j_ude_b as
+// the knee, j_te as the ankle, and the middle finger as the toes, being the direction the hand points.
 public struct LegSide
 {
     public int Hip, Knee, Ankle, Toes;
@@ -57,6 +59,8 @@ public unsafe struct LegChain
     public int SpineBSlot, SpineCSlot, NeckSlot;
     public LegSide Left;
     public LegSide Right;
+    public LegSide LeftArm;
+    public LegSide RightArm;
 
     public readonly bool Resolved => this.Skeleton != 0 && this.Left.Resolved && this.Right.Resolved && this.LegLength > 1e-3f;
 
@@ -80,6 +84,8 @@ public unsafe struct LegChain
             SpineSlotOf = [],
             Left = new LegSide { Hip = -1, Knee = -1, Ankle = -1, Toes = -1 },
             Right = new LegSide { Hip = -1, Knee = -1, Ankle = -1, Toes = -1 },
+            LeftArm = new LegSide { Hip = -1, Knee = -1, Ankle = -1, Toes = -1 },
+            RightArm = new LegSide { Hip = -1, Knee = -1, Ankle = -1, Toes = -1 },
         };
 
         for (var i = 0; i < chain.BoneCount; i++)
@@ -96,6 +102,20 @@ public unsafe struct LegChain
                 case "j_sebo_b": chain.SpineB = i; continue;
                 case "j_sebo_c": chain.SpineC = i; continue;
                 case "j_kubi": chain.Neck = i; continue;
+            }
+
+            if (name is "j_ude_a_l" or "j_ude_b_l" or "j_te_l" or "j_naka_a_l" or "j_ude_a_r" or "j_ude_b_r" or "j_te_r" or "j_naka_a_r")
+            {
+                ref var arm = ref (name[^1] == 'l' ? ref chain.LeftArm : ref chain.RightArm);
+                switch (name)
+                {
+                    case "j_ude_a_l" or "j_ude_a_r": arm.Hip = i; break;
+                    case "j_ude_b_l" or "j_ude_b_r": arm.Knee = i; break;
+                    case "j_te_l" or "j_te_r": arm.Ankle = i; break;
+                    default: arm.Toes = i; break;
+                }
+
+                continue;
             }
 
             if (name.Length != 9 || !name.StartsWith("j_asi_", StringComparison.Ordinal))
@@ -115,6 +135,8 @@ public unsafe struct LegChain
 
         BuildSubtree(hs, ref chain.Left);
         BuildSubtree(hs, ref chain.Right);
+        BuildSubtree(hs, ref chain.LeftArm);
+        BuildSubtree(hs, ref chain.RightArm);
         if (chain.SpineA >= 0 && chain.SpineB >= 0 && chain.SpineC >= 0 && chain.Neck >= 0)
         {
             BuildSubtree(hs, chain.SpineA, out chain.SpineSub, out chain.SpineParentSlot, out chain.SpineSlotOf);
