@@ -6,10 +6,9 @@ namespace FootIk;
 
 public sealed unsafe partial class Plugin
 {
-    // Layer 1, any non-zero material. The 0x4000 filter that the ClientStructs wrapper applies is blind to standable
-    // placed objects: a tree stump read material 0x2005.
-    // Seen in game: shallow water surface 0x380D against a standable tree stump 0x2005. Only these two bits set it apart,
-    // so they are the best guess at what marks water; the see-through below stays harmless if a floor carries them too.
+    // Layer 1, any non-zero material: the 0x4000 filter the ClientStructs wrapper applies is blind to standable placed
+    // objects (a tree stump read 0x2005). Seen in game: shallow water 0x380D against that stump 0x2005, so these two
+    // bits are the best guess at what marks water; the see-through below stays harmless if a floor carries them too.
     private const ulong WaterMaterialBits = 0x1800;
 
     private bool Raycast(Vector3 origin, out RaycastHit hit, float maxDist) => this.Raycast(origin, -Vector3.UnitY, out hit, maxDist);
@@ -47,15 +46,6 @@ public sealed unsafe partial class Plugin
         return ok;
     }
 
-    // The boot's extent around the ankle, in world units: it reaches further forward than back.
-    private readonly struct FootBox(float ahead, float behind, float halfWidth, float height)
-    {
-        public readonly float Ahead = ahead;
-        public readonly float Behind = behind;
-        public readonly float HalfWidth = halfWidth;
-        public readonly float Height = height;
-    }
-
     private enum Ground
     {
         None,
@@ -77,8 +67,6 @@ public sealed unsafe partial class Plugin
     }
 
     // What is under (at.X, at.Z), relative to the ground under the body.
-    private Ground ProbeSupport(Vector3 at, in Frame f, out RaycastHit hit) => this.ProbeSupport(at, in f, out hit, out _);
-
     private Ground ProbeSupport(Vector3 at, in Frame f, out RaycastHit hit, out float gy)
     {
         gy = 0f;
@@ -93,20 +81,18 @@ public sealed unsafe partial class Plugin
             : Ground.Standable;
     }
 
-    private bool TrySupport(Vector3 at, in Frame f, out RaycastHit hit) => this.ProbeSupport(at, in f, out hit) == Ground.Standable;
-
     // With `level`, only ground at the level the character stands on, not lower ground it could step down to.
     private bool TrySupport(Vector3 at, in Frame f, bool level, out RaycastHit hit) => this.ProbeSupport(at, in f, out hit, out var gy) == Ground.Standable && (!level || MathF.Abs(gy) <= f.StepTol);
 
-    // The smallest horizontal move that takes the boot out of whatever wall it overlaps. Feelers reach from the ankle,
-    // at boot height, to each edge of the box; one cut short by something steep means the boot is inside it by the
-    // remainder. Rising ground is not a wall.
-    private Vector3 WallPush(Vector3 at, Vector3 forward, in FootBox box, float groundY, in Frame f)
+    // The smallest horizontal move that takes the boot out of whatever wall it overlaps: feelers reach from the ankle
+    // at boot height, and one cut short by something steep means the boot is inside it by the remainder. Rising ground
+    // is not a wall.
+    private Vector3 WallPush(Vector3 at, Vector3 forward, float ahead, float clearance, float height, float groundY, in Frame f)
     {
         var right = new Vector3(forward.Z, 0f, -forward.X);
-        var eye = new Vector3(at.X, groundY + box.Height, at.Z);
+        var eye = new Vector3(at.X, groundY + height, at.Z);
         var push = Vector3.Zero;
-        Span<Vector2> arms = [new(0f, box.Ahead), new(0f, -box.Behind), new(box.HalfWidth, 0f), new(-box.HalfWidth, 0f)];
+        Span<Vector2> arms = [new(0f, ahead), new(0f, -clearance), new(clearance, 0f), new(-clearance, 0f)];
         foreach (var arm in arms)
         {
             var dir = (right * arm.X) + (forward * arm.Y);
@@ -146,8 +132,6 @@ public sealed unsafe partial class Plugin
         GroundAt(in hit, hit.Point.X, hit.Point.Z, out var normal);
         return normal.Y;
     }
-
-    private static float MoveToward(float v, float target, float step) => v < target ? MathF.Min(v + step, target) : MathF.Max(v - step, target);
 
     // A non-finite target is dropped rather than eased in: once inside, NaN never leaves an accumulator.
     private static float Toward(float v, float target, float k) => float.IsFinite(target) ? v + ((target - v) * k) : v;

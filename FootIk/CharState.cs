@@ -3,8 +3,7 @@ using System.Numerics;
 
 namespace FootIk;
 
-// One per tracked character, held in Plugin.states and keyed by the character's address. Plain mutable fields like
-// Frame and Snapshot: the tick writes them and nothing else reads them.
+// One per tracked character, held in Plugin.states and keyed by the character's address.
 internal sealed class CharState
 {
     public ulong Id;               // the spawn this state belongs to; the allocator reuses object addresses

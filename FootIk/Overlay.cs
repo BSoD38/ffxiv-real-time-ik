@@ -62,12 +62,17 @@ internal sealed class Overlay : Window
 
     private static bool Advanced() => ImGui.CollapsingHeader("Advanced");
 
-    private void Slider(string label, ref float v, float min, float max, string format, string help)
+    private void SetWidth(string label)
     {
         var style = ImGui.GetStyle();
         this.labelMax = MathF.Max(this.labelMax, ImGui.CalcTextSize(label).X);
         var reserve = this.labelReserve[this.tab] + ImGui.CalcTextSize("(?)").X + style.ItemInnerSpacing.X + (style.ItemSpacing.X * 2f);
         ImGui.SetNextItemWidth(MathF.Max(MinSliderWidth, ImGui.GetContentRegionAvail().X - reserve));
+    }
+
+    private void Slider(string label, ref float v, float min, float max, string format, string help)
+    {
+        this.SetWidth(label);
         ImGui.SliderFloat(label, ref v, min, max, format);
 
         // On release rather than on change: a drag would otherwise write the file every frame.
@@ -81,10 +86,7 @@ internal sealed class Overlay : Window
 
     private void SliderInt(string label, ref int v, int min, int max, string format, string help)
     {
-        var style = ImGui.GetStyle();
-        this.labelMax = MathF.Max(this.labelMax, ImGui.CalcTextSize(label).X);
-        var reserve = this.labelReserve[this.tab] + ImGui.CalcTextSize("(?)").X + style.ItemInnerSpacing.X + (style.ItemSpacing.X * 2f);
-        ImGui.SetNextItemWidth(MathF.Max(MinSliderWidth, ImGui.GetContentRegionAvail().X - reserve));
+        this.SetWidth(label);
         ImGui.SliderInt(label, ref v, min, max, format);
         if (ImGui.IsItemDeactivatedAfterEdit())
         {
@@ -96,10 +98,7 @@ internal sealed class Overlay : Window
 
     private void Combo(string label, ref Who v, string items, string help)
     {
-        var style = ImGui.GetStyle();
-        this.labelMax = MathF.Max(this.labelMax, ImGui.CalcTextSize(label).X);
-        var reserve = this.labelReserve[this.tab] + ImGui.CalcTextSize("(?)").X + style.ItemInnerSpacing.X + (style.ItemSpacing.X * 2f);
-        ImGui.SetNextItemWidth(MathF.Max(MinSliderWidth, ImGui.GetContentRegionAvail().X - reserve));
+        this.SetWidth(label);
         var i = (int)v;
         if (ImGui.Combo(label, ref i, items))
         {
@@ -344,7 +343,7 @@ internal sealed class Overlay : Window
         ImGui.TextUnformatted($"Body drop raw {s.RawDrop:F3}  smooth {s.SmoothDrop:F3}  applied {s.Applied:F3}");
         ImGui.TextUnformatted($"Body drop peak {this.rawPeak:F3}");
         this.lostPeak = MathF.Max(this.lostPeak * 0.99f, MathF.Abs(s.OffsetSeen - s.OffsetWritten));
-        ImGui.TextUnformatted(OffsetLine(in s, this.lostPeak));
+        ImGui.TextUnformatted($"Draw offset ours {s.OffsetWritten:F3}  game holds {s.OffsetSeen:F3}  lost peak {this.lostPeak:F3}");
         if (ImGui.SmallButton("Reset peaks"))
         {
             this.rawPeak = 0f;
@@ -355,7 +354,6 @@ internal sealed class Overlay : Window
         ImGui.TextUnformatted($"Body shift {Fmt(s.BodyShift)}");
         ImGui.TextUnformatted($"Spine pitch {s.SpinePitchDeg:F1} deg   lean {s.LeanDeg:F1} deg");
         ImGui.TextUnformatted($"On the floor {s.OnFloor}   hips {s.HipFrac:F2}   body tilt {s.SitTiltDeg:F1} deg");
-        ImGui.TextUnformatted($"Arms resolved {s.ArmsResolved}   hand over ground L {s.LeftHandY:F3}  R {s.RightHandY:F3}");
         if (s.HasPose && !s.ChainResolved)
         {
             ImGui.TextUnformatted("Chain: not resolved (j_asi_[a,b,d,e]_[lr] missing)");
@@ -379,7 +377,7 @@ internal sealed class Overlay : Window
         Row("ground Y", l.GroundModelY, r.GroundModelY, "F3");
         Row("ankle above ground", l.AnkleAboveGround, r.AnkleAboveGround, "F3");
         Row("rest (bind)", l.Rest, r.Rest, "F3");
-        Row("delta", l.Delta, r.Delta, "F3");
+        Row("delta", l.Hit ? l.Rest - l.AnkleAboveGround : 0f, r.Hit ? r.Rest - r.AnkleAboveGround : 0f, "F3");
         Row("planted", l.Planted, r.Planted, "F2");
         Row("can extend", l.MaxExtend, r.MaxExtend, "F3");
         Row("can raise", l.MaxRaiseByKnee, r.MaxRaiseByKnee, "F3");
@@ -446,8 +444,6 @@ internal sealed class Overlay : Window
             dl.AddLine(g, n, 0xFFFFFF00, 2f);
         }
     }
-
-    private static string OffsetLine(in Snapshot s, float lost) => $"Draw offset ours {s.OffsetWritten:F3}  game holds {s.OffsetSeen:F3}  lost peak {lost:F3}";
 
     private static string Fmt(Vector3 v) => $"{v.X:F2}, {v.Y:F2}, {v.Z:F2}";
 }

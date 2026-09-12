@@ -27,7 +27,6 @@ public struct FootSnapshot
     public ulong Material;
     public float GroundModelY;
     public float AnkleAboveGround;
-    public float Delta;
     public bool OverEdge;
     public bool BelowLevel; // ground a step or more below the level the character stands on
     public bool Gathered;
@@ -61,8 +60,6 @@ public struct Snapshot
     public bool OnFloor;
     public float SitTiltDeg;
     public float HipFrac;
-    public bool ArmsResolved;
-    public float LeftHandY, RightHandY;    // wrist height over the ground under it, model units; NaN when nothing is under it
     public float LegLength;
     public float BaseY;
     public float RawDrop;

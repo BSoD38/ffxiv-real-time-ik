@@ -15,7 +15,7 @@ namespace FootIk;
 
 public sealed unsafe partial class Plugin : IDalamudPlugin
 {
-    // Both from CustomizePlus Core/Data/Constants.cs, copied 2026-09-10.
+    // Both from CustomizePlus Core/Data/Constants.cs.
     // Render: bone edits made here, before Original, survive to the rendered frame.
     // Move (GameObject_UpdateVisualPosition): draw-object position edits made after Original persist for the frame.
     private const string RenderSig = "E8 ?? ?? ?? ?? 48 81 C3 ?? ?? ?? ?? BF ?? ?? ?? ?? 33 ED";
@@ -163,9 +163,8 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
         return this.renderHook!.Original(a1, a2, a3, a4);
     }
 
-    // Delta-only, like the draw offset: the game does not always rewrite the draw position from the logical one, and
-    // while it eases the one toward the other an offset re-added on top of itself every frame compounds until the
-    // character is thrown clear of the camera. What was added last frame comes off before Original sees the position.
+    // Delta-only, like the draw offset: an offset re-added on top of itself every frame compounds until the character
+    // is thrown clear of the camera. What was added last frame comes off before Original sees the position.
     private void MoveDetour(nint gameObject)
     {
         this.states.TryGetValue(gameObject, out var st);
@@ -241,12 +240,9 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
             return;
         }
 
-        // The game clears DrawOffset whenever it moves a character, and a stair step is exactly that, so our share goes
-        // with it (2026-09-11, measured in game: the field read zero while we believed a tread was applied). A write made
-        // only when our own target changes is therefore never re-asserted, and the body drop we worked out is lost for as
-        // long as it stays constant - which is most of a climb. So: work out what the field holds besides us, put ours
-        // back on top of that, and do it whenever the field is not already what it should be. Still only ever our own
-        // share, so SimpleHeels and friends keep theirs; a cleared field simply has nobody's in it any more.
+        // The game clears DrawOffset whenever it moves a character, and a stair step is exactly that, so a write made
+        // only when our own target changes is never re-asserted. Read the field, take our last share off to see what
+        // else is in there, and put ours back on top - still only our own share, so SimpleHeels keeps its.
         ref var off = ref chr->GameObject.DrawOffset;
         var held = off.Y;
         st.SeenOffsetY = held;
@@ -262,9 +258,8 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
         st.PelvisForMove = this.moveHook == null ? Vector3.Zero : new Vector3(total.X, 0f, total.Z);
     }
 
-    // Takes our own offsets back off every character we hold. The breaker path needs it too: a tripped Tick never
-    // reaches ApplyPelvis again, so without this the characters stay sunk until the plugin is unloaded. Walks the
-    // object table rather than the states directly: an address we tracked last frame may have been freed since.
+    // Takes our own offsets back off every character we hold; the breaker path needs it too, a tripped Tick never
+    // reaching ApplyPelvis again. Walks the object table: an address we tracked last frame may have been freed since.
     private void Release()
     {
         for (var i = 0; i < Objects.Length; i++)

@@ -3,8 +3,7 @@ using Dalamud.Configuration;
 
 namespace FootIk;
 
-// Who the mod works on besides you, widest first. Relations come from the character's own flags, so no social-window
-// proxy is involved: it is the same byte that draws the friend icon on a nameplate.
+// Who the mod works on besides you, widest first.
 public enum Who
 {
     Everyone,
@@ -33,7 +32,7 @@ public sealed class Settings : IPluginConfiguration
     public float StraightenLimit = 0.98f;
     public float MaxKneeBendDeg = 110f; // measured from a straight leg, so higher allows a deeper crouch
     public float RestAdjustFrac;
-    public float SlopeLiftFrac; // ponytail: interim workaround for the slope sink, see PLAN.md M5
+    public float SlopeLiftFrac; // stopgap: on natural slopes the feet land short of the visible ground, so add raise by slope tangent
 
     public float MaxAnkleAngleDeg = 30f;
     public float TiltFadeFrac = 0.05f;
@@ -43,7 +42,6 @@ public sealed class Settings : IPluginConfiguration
     public bool GatherToPosition; // gather onto the logical position instead of the nearest support, and leave the body on it
     public float GatherTauIn = 0.1f;
     public float GatherTauOut = 0.1f;
-    public float StillSpeed = 0.15f; // m/s
     public int GatherPrecision = 2; // search directions = 4x this
     public int OthersGatherPrecision; // the same for other characters; 0 leaves their feet where the animation puts them
     public bool KeepFeetOutOfWalls = true;
@@ -71,9 +69,8 @@ public sealed class Settings : IPluginConfiguration
     public Who Who;
     public float OthersRadius = 15f; // yalms from the local player, not a body-relative distance
 
-    // A truncated or hand-edited file can deserialise a NaN, and NaN spreads through the pose maths silently: every
-    // comparison against it is false, so the guards downstream let it through as "not too far" rather than catching it.
-    // Reflection so a field added later is covered without anyone remembering to come back here.
+    // A truncated or hand-edited file can deserialise a NaN, and every comparison against NaN is false, so the guards
+    // downstream let it through as "not too far". Reflection so a field added later is covered.
     public void Repair()
     {
         var defaults = new Settings();

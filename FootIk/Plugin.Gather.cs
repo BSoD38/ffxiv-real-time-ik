@@ -12,17 +12,14 @@ public sealed unsafe partial class Plugin
     private const int MaxSpots = (MaxDirs * Steps) + 1;
 
     // Where the feet stand, chosen together: rays fan out from each ankle, every standable sample is a candidate, and
-    // the cheapest pair a stance apart and uncrossed wins, so side by side or one behind the other falls out of the
-    // ground's shape. Searched from the ankles, not the origin: the collision capsule is far wider than a guardrail, so the
-    // character can stand with its position off the support entirely. Cheapest means the smallest move, or with
-    // `GatherToPosition` the pair that sits centred on the logical position, which is where the body then stays.
+    // the cheapest pair a stance apart and uncrossed wins. Searched from the ankles, not the origin: the collision
+    // capsule is far wider than a guardrail, so the character can stand with its position off the support entirely.
     private void GatherFeet(ref Frame f, ref Snapshot snap, scoped Span<Vector3> desired)
     {
         var c = this.Settings;
         desired.Clear();
-        // Not while the gate is closed either: the game flags a fall as jumping, and a character in the air has nothing to
-        // gather onto. Picking targets on the ledge it just left would drag the feet, and the body with them, back to it
-        // for as long as the blend takes to fade. Not during emotes either: a dance stance gathered onto a rail reads wrong.
+        // Not while the gate is closed: the game flags a fall as jumping, and targets on the ledge just left would drag
+        // the feet back to it. Not during emotes either: a dance stance gathered onto a rail reads wrong.
         if (!c.GatherFeet || f.Dirs == 0 || !snap.Gate || snap.Mode != CharacterModes.Normal)
         {
             snap.Left.GatherBlock = Block.Off;
@@ -32,14 +29,9 @@ public sealed unsafe partial class Plugin
             return;
         }
 
-        // A foot over ground a tread or more below the character is over a drop, unless the character is on an incline and
-        // that is simply where the slope or the stair puts a leading foot: beside a rail or a curb it moves onto the level
-        // support like a foot over a void; on a hill it reaches for the ground as before. The exemption covers a foot far
-        // over a drop too: running downhill the leading foot swings out over ground well below any threshold, and gathering
-        // it back uphill every stride reads as a stumble. Only a foot over nothing at all gathers regardless.
-        // `OnIncline` reads two heights a leg apart and cannot tell a slope from a ledge: at the edge of a crate or a step
-        // it reports the whole drop, the strongest incline there is, exactly where the feet most want gathering. It is only
-        // ever about a stride, so it is asked only of a character in motion; standing at that edge, the hit triangles decide.
+        // A foot over ground a tread or more below the character is over a drop, unless it is on an incline, where that
+        // is just where a slope puts a leading foot; only a foot over nothing gathers regardless. `OnIncline` cannot
+        // tell a slope from a ledge, so it is asked only in motion; standing at an edge, the hit triangles decide.
         var low = snap.Left.OverEdge || snap.Left.BelowLevel || snap.Right.OverEdge || snap.Right.BelowLevel;
         var incline = low && (Sloped(in snap.Left) || Sloped(in snap.Right) || (!f.Still && this.OnIncline(in f)));
         Span<bool> needs = stackalloc bool[2];
@@ -56,8 +48,8 @@ public sealed unsafe partial class Plugin
 
         var minSep = 2f * c.MinStanceFrac * f.LegLen * f.Scale.Y;
         var footLen = this.FootLength(in snap, in f) * f.Scale.Y;
-        // Crossing is judged against the character's own right, not the animated stance: a turning animation swings the
-        // ankles past each other, and a rule tied to them re-plants the feet several times in one turn.
+        // Crossing is judged against the character's own right, not the animated stance: a turn swings the ankles past
+        // each other, and a rule tied to them re-plants the feet several times in one turn.
         var side = Vector3.Transform(f.St.Chain.BindSide, f.Rot);
         var fwd = Vector3.Transform(f.St.Chain.BindForward, f.Rot);
 
@@ -70,9 +62,8 @@ public sealed unsafe partial class Plugin
         Span<bool> level = stackalloc bool[2];
         held[0] = this.Hold(ref f, 0);
         held[1] = this.Hold(ref f, 1);
-        // A pair held through a turn re-plants only once the turn has crossed the legs, and a little past that so a stance
-        // facing along a beam, where the feet stand in line, does not flicker between the two ways round; or once the
-        // boots would clearly overlap.
+        // A held pair re-plants only once a turn has crossed the legs, and a little past that so a stance in line along
+        // a beam does not flicker between the two ways round; or once the boots would clearly overlap.
         if (held[0] && held[1])
         {
             var heldSep = new Vector3(f.St.LatchTarget[1].X - f.St.LatchTarget[0].X, 0f, f.St.LatchTarget[1].Z - f.St.LatchTarget[0].Z);
@@ -84,9 +75,8 @@ public sealed unsafe partial class Plugin
             }
         }
 
-        // Where the body would have to stand for the stance to look centred on it, and where each foot stays if it does
-        // not search. Both are known before any search, so a foot that does search can aim opposite the one that stays:
-        // a pair centred here is a pair the body does not have to move onto, which is the whole of platforming mode.
+        // Where the body would stand for the stance to look centred, and where each foot stays if it does not search,
+        // so a searching foot can aim opposite the one that stays: a pair centred here needs no body move onto it.
         var centre = f.PosAnchor + Vector3.Transform(f.Scale * f.St.Chain.BindMid, f.Rot);
         Span<Vector3> keptAt = stackalloc Vector3[2];
         keptAt[0] = held[0] ? f.St.LatchTarget[0] : snap.Left.AnkleWorld;
@@ -156,7 +146,7 @@ public sealed unsafe partial class Plugin
             var kept = i == 0 && (held[s] || !needs[s]);
             var at = (s * MaxSpots) + i;
             target[s] = spots[at];
-            if (lines[at] >= 0 && this.Recentre(foot.AnkleWorld, lines[at], in f, level[s], out var mid, out _))
+            if (lines[at] >= 0 && this.Recentre(foot.AnkleWorld, lines[at], in f, level[s], out var mid))
             {
                 target[s] = mid;
             }
@@ -170,8 +160,7 @@ public sealed unsafe partial class Plugin
             }
         }
 
-        // Not while gathering to the position: with one foot staying put, narrowing moves only the other one, and that
-        // walks the pair straight back off the centre the search just aimed it at.
+        // Not in platforming mode: with one foot staying put, narrowing moves only the other and walks the pair off centre.
         if (!c.GatherToPosition)
         {
             this.Tighten(target, free, level, minSep, footLen, side, fwd, in f);
@@ -230,9 +219,8 @@ public sealed unsafe partial class Plugin
             && MathF.Abs(ahead - behind) > f.StepTol * f.Scale.Y;
     }
 
-    // Candidates lie on a fan of lines, so on a thin support far from the ankle they are spaced out along it and the
-    // cheapest fitting pair can be much wider than it needs to be. Both spots stand on the support, and on anything
-    // straight so does the line between them: draw the movable feet together along it to the width that just fits.
+    // Candidates lie on a fan of lines, so on a thin support the cheapest fitting pair can be much wider than it needs
+    // to be. Both spots stand on the support, so on anything straight the line between them does too: draw them in.
     private void Tighten(scoped Span<Vector3> target, scoped ReadOnlySpan<bool> free, scoped ReadOnlySpan<bool> level, float minSep, float footLen, Vector3 side, Vector3 fwd, in Frame f)
     {
         if (!free[0] && !free[1])
@@ -272,9 +260,8 @@ public sealed unsafe partial class Plugin
         }
     }
 
-    // While stationary, hold the world target chosen earlier so the stop animation's stance change, or a turn on the
-    // spot, is absorbed by the IK instead of dragging the target. A turning character swings each ankle through a wide
-    // arc, so the hold is judged from the hip, which barely moves.
+    // While stationary, hold the world target chosen earlier so a stop animation or a turn on the spot is absorbed by
+    // the IK instead of dragging the target. Judged from the hip: a turn swings the ankle through a wide arc.
     private bool Hold(ref Frame f, int s)
     {
         if (!f.Still || !f.St.Latched[s])
@@ -284,7 +271,7 @@ public sealed unsafe partial class Plugin
 
         var hipWorld = f.PosAnchor + Vector3.Transform(f.Scale * Bones.Pos(in f.Bones[f.St.Chain.Side(s).Hip]), f.Rot);
         var reach = new Vector3(f.St.LatchTarget[s].X - hipWorld.X, 0f, f.St.LatchTarget[s].Z - hipWorld.Z).Length();
-        return reach < f.Reach && this.TrySupport(f.St.LatchTarget[s], in f, out _);
+        return reach < f.Reach && this.TrySupport(f.St.LatchTarget[s], in f, false, out _);
     }
 
     // Lines are numbered direction * 64 + sample, so one int names a spot.
@@ -294,15 +281,10 @@ public sealed unsafe partial class Plugin
         return new Vector3(MathF.Sin(ang), 0f, MathF.Cos(ang));
     }
 
-    // Standable samples along lines fanned out from the ankle, each line cut where ground too high to walk through
-    // begins. What makes a sample cheap is the whole difference between the two gather modes. By default it is the move
-    // it costs, and a sample beside an edge costs a whole reach extra, so a foot settles one step in wherever the support
-    // is wide enough. Gathering to the position costs the distance from `aim` instead, the spot that leaves the pair
-    // centred on the body, and drops that edge penalty: the feet straddle where the game really has the character
-    // standing, edge and all, and the body needs no move of its own to look centred on them. Either way a sample with an
-    // edge on both sides is marked for recentring, and costs favour the previous target, so a moving pattern does not hop
-    // between equally good spots. With `levelOnly`, only ground at the level the character stands on counts, for a foot
-    // that has lower ground to fall back on; `ankleOk` says whether where the ankle already is counts as ground.
+    // Standable samples along lines fanned out from the ankle, each cut where ground too high to walk through begins.
+    // Cost is the move plus a reach penalty beside an edge; platforming mode costs distance from `aim`, no penalty.
+    // Ties favour the previous target, or a moving pattern hops. `levelOnly`: the character's own level only;
+    // `ankleOk`: where the ankle already is counts as ground.
     private int Sample(ref Frame f, int s, in FootSnapshot foot, Vector3 aim, bool levelOnly, bool ankleOk, scoped Span<Vector3> spots, scoped Span<float> costs, scoped Span<int> lines)
     {
         var dirs = f.Dirs;
@@ -362,7 +344,7 @@ public sealed unsafe partial class Plugin
 
     // A sample with no standable neighbour on its line stands on something narrower than the spacing, a guardrail for
     // one, and may sit at its very edge. Find both edges and stand in the middle.
-    private bool Recentre(Vector3 ankle, int line, in Frame f, bool level, out Vector3 mid, out RaycastHit hit)
+    private bool Recentre(Vector3 ankle, int line, in Frame f, bool level, out Vector3 mid)
     {
         var dir = this.SearchDir(line, in f);
         var step = f.Reach / Steps;
@@ -370,7 +352,7 @@ public sealed unsafe partial class Plugin
         var near = this.Edge(ankle, dir, step * (k - 1), step * k, in f, level);
         var far = this.Edge(ankle, dir, step * (k + 1), step * k, in f, level);
         mid = ankle + (dir * ((near + far) * 0.5f));
-        return this.TrySupport(mid, in f, level, out hit);
+        return this.TrySupport(mid, in f, level, out _);
     }
 
     // Where standable ground begins along dir, between `off` (not standable) and `on` (standable).

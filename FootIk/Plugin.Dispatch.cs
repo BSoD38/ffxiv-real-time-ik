@@ -44,9 +44,9 @@ public sealed unsafe partial class Plugin
         this.Sweep(localAddr, lp, dt, rawDt);
     }
 
-    // Everyone else: nearest first inside the radius, up to the budget, which is a count rather than a time slice
-    // because the raycasts are the cost and a count bounds them. A character we already hold state for is ticked
-    // whether it is picked or not, with the gate closed if it is not, so our offsets come off before it is dropped.
+    // Everyone else: nearest first inside the radius, up to a budget that is a count rather than a time slice, because
+    // the raycasts are the cost. A character we already hold state for is ticked even when not picked, gate closed, so
+    // our offsets come off before it is dropped.
     private void Sweep(nint localAddr, IGameObject? lp, float dt, double rawDt)
     {
         var c = this.Settings;
@@ -119,9 +119,8 @@ public sealed unsafe partial class Plugin
     }
 
     // A non-humanoid NPC holds a slot until its chain fails to resolve, so NPCs go off wholesale rather than one kind
-    // at a time. Party, alliance and friend are read off the character itself (Dalamud's StatusFlags over the game's
-    // relation byte, the same one that draws the friend icon on a nameplate), so nothing depends on the player having
-    // opened a social window.
+    // at a time. Party, alliance and friend come from the character's own relation byte (the one that draws the friend
+    // icon on a nameplate), so nothing depends on the player having opened a social window.
     private static bool Eligible(IGameObject o, Who who)
     {
         if (who == Who.Everyone)

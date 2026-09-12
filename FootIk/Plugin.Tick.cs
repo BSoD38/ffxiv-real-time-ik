@@ -8,9 +8,8 @@ using FFXIVClientStructs.Havok.Common.Base.Math.QsTransform;
 
 namespace FootIk;
 
-// All model-space heights here are relative to the character origin. During an emote, step thresholds and the probe
+// Model-space heights are relative to the character origin, except during an emote, where step thresholds and the probe
 // window are judged from the ground under the body instead (Frame.BaseY): root motion can carry it far from the origin.
-// Never while walking: on a guardrail the ground under the body is the deck below, and the origin is the level.
 public sealed unsafe partial class Plugin
 {
     private ref struct Frame
@@ -42,6 +41,8 @@ public sealed unsafe partial class Plugin
         public float GatherWant;
     }
 
+    private const float StillSpeed = 0.15f; // m/s, not a *Frac: every race moves at the same world speed.
+
     // Hip height over leg length: below FloorHips the character is on the floor rather than on its feet, and above
     // StandingHips it is clearly back on them. The Status tab reads it out; an idle pose measured over 0.85 in game.
     private const float FloorHips = 0.4f;
@@ -59,15 +60,9 @@ public sealed unsafe partial class Plugin
         snap.Conditions = Condition.Any(this.globalFlags) || (local && Condition.Any(this.gateFlags));
         // MovementState is the per-character reading of what ICondition tells us about ourselves: flying and diving.
         var clear = c.Enabled && !retire && !snap.Conditions && !snap.GPose && chr->MoveController.MovementState == MovementStateOptions.Normal;
-        // Sitting on the ground, on a chair and sleeping are InPositionLoop with the EmoteMode row in ModeParam: 1
-        // ground, 2 chair, 3 sleep. A chair is furniture, not ground. Everything else that loops is EmoteLoop, a dance
-        // and /pushups alike, and nothing in the sheet tells those apart, so the hips do: down there the legs carry
-        // nothing, and the standing pass read them as planted feet asking the body up or down, which floated /pushups and
-        // sank /situps. The hips are last frame's, the pose not being resolved yet here, and the blend is many frames
-        // long, so the lag does not show.
-        // Latched low and released high. /pushups swings the hips up and down through any single threshold every rep, and
-        // a gate flapping with it would fade the legs in and out; the emote's mode flips back the frame the get-up
-        // animation starts, while the character is still down there, so that cannot be the release either.
+        // InPositionLoop carries the EmoteMode row in ModeParam: 1 ground sit, 2 chair, 3 sleep. A chair is furniture,
+        // not ground. Every other looping emote is EmoteLoop, a dance and /pushups alike, so the pose decides: latched
+        // low, released high, because /pushups crosses any single threshold every rep. HipFrac is last frame's.
         if (mode == CharacterModes.EmoteLoop && st.HipFrac < FloorHips)
         {
             st.FloorLoop = true;
@@ -80,8 +75,7 @@ public sealed unsafe partial class Plugin
         snap.OnFloor = clear && c.Emotes && ((mode == CharacterModes.InPositionLoop && chr->ModeParam is 1 or 3) || st.FloorLoop);
         snap.Gate = clear && !snap.IsJumping && !snap.OnFloor && (mode == CharacterModes.Normal || (c.Emotes && mode == CharacterModes.EmoteLoop));
 
-        // A zero component in the skeleton scale turns every model-space conversion below into infinity, and SmoothDrop
-        // and BodyShift hold a NaN forever once one reaches them.
+        // A zero in the skeleton scale turns every model-space conversion into infinity, and SmoothDrop keeps a NaN forever.
         var poseOk = ResolvePose(chr, ref st.Chain, ref snap, out var pose, out var skel)
             && skel->Transform.Scale.X > 1e-4f && skel->Transform.Scale.Y > 1e-4f && skel->Transform.Scale.Z > 1e-4f;
         var f = new Frame { St = st, Dt = dt, Pose = pose, Skel = skel };
@@ -94,19 +88,18 @@ public sealed unsafe partial class Plugin
         f.Dirs = 4 * Math.Clamp(local ? c.GatherPrecision : c.OthersGatherPrecision, 0, MaxDirs / 4);
         f.LiftThreshold = MathF.Max(c.LiftThresholdFrac * f.LegLen, 1e-3f);
         snap.LegLength = f.LegLen;
-        st.Blend = MoveToward(st.Blend, snap.Gate && poseOk ? 1f : 0f, c.BlendSeconds > 0 ? dt / c.BlendSeconds : 1f);
+        st.Blend = Math.Clamp(st.Blend + ((snap.Gate && poseOk ? 1f : -1f) * (c.BlendSeconds > 0 ? dt / c.BlendSeconds : 1f)), 0f, 1f);
         snap.Blend = st.Blend;
         var active = poseOk && (snap.Gate || st.Blend > 0f);
 
-        // Speed comes from the logical position: gathering latches while stationary, the lean needs the travel direction.
-        // Over the unclamped interval: a load hitch must not read as a sprint and drop every hold.
+        // From the logical position, over the unclamped interval: a load hitch must not read as a sprint and drop every hold.
         Vector3 logicalNow = chr->GameObject.Position;
         var moved = logicalNow - st.LastLogical;
         f.Speed = !st.Fresh && rawDt > 1e-4 ? moved.Length() / (float)rawDt : 0f;
         f.VelDir = f.Speed > 0.05f ? Vector3.Normalize(moved) : Vector3.Zero;
         st.LastLogical = logicalNow;
         st.Fresh = false;
-        f.Still = f.Speed < c.StillSpeed;
+        f.Still = f.Speed < StillSpeed;
         snap.Speed = f.Speed;
 
         var rawDrop = 0f;
@@ -122,15 +115,14 @@ public sealed unsafe partial class Plugin
 
         if (active)
         {
-            // Only an emote can carry the body away from the origin. While walking, the logical position is the level the
-            // character stands on; the ground under the hips may be a deck a metre below the rail it is walking along.
+            // Only an emote can carry the body away from the origin. While walking the ground under the hips may be a
+            // deck below the rail, while the origin is the level the character stands on.
             if (mode != CharacterModes.Normal)
             {
                 this.ProbeBase(ref f);
             }
 
             snap.BaseY = f.BaseY;
-            this.ProbeHands(ref f, ref snap);
             Span<Vector3> desired = stackalloc Vector3[2];
             this.ProbeFoot(ref f, 0, ref snap.Left);
             this.ProbeFoot(ref f, 1, ref snap.Right);
@@ -146,16 +138,15 @@ public sealed unsafe partial class Plugin
                 this.MeasureFoot(ref f, s, ref foot, desired[s], ref body);
             }
 
-            // The body sits where the planted feet ask, and `hi` below pins it to the lowest of them. There is no share
-            // left to hand the other leg: legs only shorten, and the lowest one is already as straight as it gets.
+            // `hi` below pins the body to the lowest planted foot. No share is left for the other leg: legs only
+            // shorten, and the lowest is already as straight as it gets.
             var want = body.WantWeight > 0f ? body.WantSum / body.WantWeight : f.BaseY;
             if (body.GatherWant < float.MaxValue)
             {
                 want = MathF.Max(want, body.GatherWant);
             }
 
-            // Reach wins over knee comfort when the two cannot both be satisfied: a foot left hanging above the ground
-            // reads worse than a knee folded past its cap.
+            // Reach wins over knee comfort: a foot left hanging reads worse than a knee folded past its cap.
             var hi = MathF.Min(body.Hi, f.BaseY + (c.MaxPelvisRaiseFrac * f.LegLen));
             var lo = MathF.Min(MathF.Max(body.Lo, f.BaseY - f.MaxDrop), hi);
             rawDrop = Math.Clamp(want, lo, hi);
@@ -191,15 +182,7 @@ public sealed unsafe partial class Plugin
         this.TiltBody(ref f, ref snap, poseOk);
     }
 
-    private static ref FootSnapshot Foot(ref Snapshot snap, int s)
-    {
-        if (s == 0)
-        {
-            return ref snap.Left;
-        }
-
-        return ref snap.Right;
-    }
+    private static ref FootSnapshot Foot(ref Snapshot snap, int s) => ref (s == 0 ? ref snap.Left : ref snap.Right);
 
     private void ReadTransform(Character* chr, ref Frame f)
     {
@@ -222,53 +205,13 @@ public sealed unsafe partial class Plugin
         f.RayDown = c.RayDownFrac * f.LegLen * f.Scale.Y;
         f.MaxDist = f.RayUp + f.RayDown;
         f.ProbeTop = f.OriginY + f.RayUp;
-        // Gather search radius, not tied to the stance: a smaller minimum stance must bring the feet closer, not shorten
-        // the search. Wide enough for the far ankle of a character standing at the very edge of its collision capsule.
+        // Deliberately not tied to the stance: a smaller minimum stance must bring the feet closer, not shorten the search.
         f.Reach = 0.85f * f.LegLen * f.Scale.Y;
     }
 
-    // Read-only: how far each wrist sits above the ground under it. Kept because it answered two questions worth keeping
-    // answered: the arm bone names resolve on a real skeleton, and the /pushups animation plants both wrists exactly on
-    // the ground plane and holds them there through the reps (0.000 on the flat, measured in game), so a hand needs no
-    // bind-pose rest height the way a sole does. Only on the floor, so it costs two rays on a pose nobody holds for long.
-    private void ProbeHands(ref Frame f, ref Snapshot snap)
-    {
-        snap.ArmsResolved = f.St.Chain.LeftArm.Resolved && f.St.Chain.RightArm.Resolved;
-        snap.LeftHandY = float.NaN;
-        snap.RightHandY = float.NaN;
-        if (!snap.OnFloor || !snap.ArmsResolved)
-        {
-            return;
-        }
-
-        for (var s = 0; s < 2; s++)
-        {
-            var arm = s == 0 ? f.St.Chain.LeftArm : f.St.Chain.RightArm;
-            var world = f.PosAnchor + Vector3.Transform(f.Scale * Bones.Pos(in f.Bones[arm.Ankle]), f.Rot);
-            if (!this.TryGround(world, in f, out _, out var groundY))
-            {
-                continue;
-            }
-
-            var above = (world.Y - groundY) / f.Scale.Y;
-            if (s == 0)
-            {
-                snap.LeftHandY = above;
-            }
-            else
-            {
-                snap.RightHandY = above;
-            }
-        }
-    }
-
-    // The ground orientation a prone body actually rests on, fitted to where it touches rather than to four probes half a
-    // leg out from the origin: those sample ground beside the torso, which on broken terrain is not the ground the
-    // character is lying on at all. Pitch comes from the hands against the toes over the body's length, roll from the
-    // right contacts against the left over its width, each contact weighted by how near the ground it already is, so one
-    // held in the air - the hands behind the head in /situps - drops out of the fit instead of dragging it. An axis with
-    // nothing to measure stays flat rather than guessing. GroundTilt's four heights and radius reduce to those two
-    // slopes, so it does the rest: the normal, the cap, and every finite check.
+    // The ground a prone body rests on, fitted to its contacts: pitch from hands against toes, roll from right against
+    // left, each weighted by how near the ground it is, so a limb in the air drops out and an unplanted axis stays flat.
+    // Probes half a leg from the origin sample beside the torso instead; solving the limbs was tried twice and reverted.
     private bool ContactTilt(ref Frame f, Vector3 fwd, Vector3 side, float cap, out Quaternion tilt)
     {
         tilt = Quaternion.Identity;
@@ -294,8 +237,7 @@ public sealed unsafe partial class Plugin
             weight[i] = Math.Clamp(1f - (MathF.Abs((at[i].Y - g) / f.Scale.Y) / f.StepTol), 0f, 1f);
         }
 
-        // Hands against toes, then right against left. Both groups of a pair must have something planted in them, or that
-        // axis has no baseline to measure a slope over.
+        // Both groups of a pair need something planted, or that axis has no baseline to measure a slope over.
         var slopeFwd = Slope(at, ground, weight, 0, 1, 2, 3, fwd, in f);
         var slopeSide = Slope(at, ground, weight, 1, 3, 0, 2, side, in f);
         if (slopeFwd == 0f && slopeSide == 0f)
@@ -325,17 +267,15 @@ public sealed unsafe partial class Plugin
         return MathF.Abs(span) < 0.1f * f.LegLen * f.Scale.Y ? 0f : (ga - gb) / span;
     }
 
-    // The ground under the body itself, the baseline for every step threshold and for the probe window. An animation
-    // that carries the root far from the origin, a dance travelling up a slope, stands the feet on ground far above or
-    // below the logical position; measured from there every foot read as a step too tall, or an edge.
+    // The ground under the body itself, the baseline for every step threshold and the probe window: an animation that
+    // carries the root far from the origin stands the feet well above or below the logical position.
     private void ProbeBase(ref Frame f)
     {
         var hips = (Bones.Pos(in f.Bones[f.St.Chain.Left.Hip]) + Bones.Pos(in f.Bones[f.St.Chain.Right.Hip])) * 0.5f;
         var at = f.PosAnchor + Vector3.Transform(f.Scale * new Vector3(hips.X, 0f, hips.Z), f.Rot);
         if (!this.TryGround(at, in f, out _, out var y))
         {
-            // Nothing in the window means the body has climbed past it or hangs over a void. Look again from as high as
-            // the character needs for headroom, no higher, so a bridge overhead is never taken for the floor.
+            // Nothing in the window: look again from headroom height, no higher, or a bridge overhead reads as the floor.
             var top = f.OriginY + (1.5f * f.LegLen * f.Scale.Y);
             if (top <= f.ProbeTop || !this.Raycast(new Vector3(at.X, top, at.Z), out var hit, top - f.ProbeTop + 0.01f))
             {
@@ -349,9 +289,10 @@ public sealed unsafe partial class Plugin
         f.ProbeTop = f.OriginY + (f.BaseY * f.Scale.Y) + f.RayUp;
     }
 
-    // Three probes along the sole, cast from character height so a foot against a step riser does not see the step top.
-    // Taking the median keeps a foot on the tread it mostly stands on, and lets a toe over the next step clip the riser
-    // as it does in the base game, instead of floating the whole foot.
+    // Three probes along the sole, cast from character height so a foot against a riser does not see the step top; the
+    // median keeps it on the tread it mostly stands on and lets a toe clip the next riser, as the base game does.
+    // Tried and reverted: highest hit wins (floats the foot), and preferring flat hits over ramps.
+    // tread, and preferring flat hits over ramps does not help on the bevelled stairs most of the game is built from.
     private void ProbeFoot(ref Frame f, int s, ref FootSnapshot foot)
     {
         var side = f.St.Chain.Side(s);
@@ -423,9 +364,8 @@ public sealed unsafe partial class Plugin
             return;
         }
 
-        // The pair was picked apart, but the wall push and recentring since may have closed it: this has the final say.
-        // Boots side by side need a stance between them, one behind the other a boot length; take the smaller move,
-        // uncrossing first if it comes to lengthwise.
+        // The wall push and recentring since may have closed the pair the search picked apart: this has the final say.
+        // Take the smaller move, a stance sideways or a boot length lengthwise, uncrossing first if it goes lengthwise.
         var minSep = 2f * c.MinStanceFrac * f.LegLen;
         var footLen = this.FootLength(in snap, in f);
         var side = f.St.Chain.BindSide;
@@ -448,17 +388,14 @@ public sealed unsafe partial class Plugin
             }
         }
 
-        // Not while gathering to the position: the body moving onto the support is exactly what hides where the game
-        // really has the character standing, which is the whole point of that mode.
+        // Not in platforming mode: the body moving onto the support is exactly what hides the logical position.
         if (this.moveHook == null || c.GatherToPosition)
         {
             return;
         }
 
-        // Stand over the feet: the body moves so the bind-pose stance centre sits over the midpoint of the final targets.
-        // Judged from the bind pose rather than the animated ankles so that neither idle sway nor a stepping turn moves
-        // the body, and a target latched mid-step does not leave it standing off to one side. A planted foot's residual
-        // then cancels the body move so it stays put in the world; a gathered foot keeps only the stance change.
+        // Stand over the feet: the bind-pose stance centre over the midpoint of the final targets. From the bind pose
+        // rather than the animated ankles, so neither idle sway nor a stepping turn moves the body.
         var mid = (desired[0] + desired[1]) * 0.5f;
         var ankleMid = (snap.Left.AnkleModel + snap.Right.AnkleModel) * 0.5f;
         bodyDesired = mid + new Vector3(ankleMid.X, 0f, ankleMid.Z) - f.St.Chain.BindMid;
@@ -502,10 +439,9 @@ public sealed unsafe partial class Plugin
         }
     }
 
-    // Keeps the boot out of walls wherever it stands, gathering or not. Runs before the stance rule so that rule keeps
-    // the final say: a wall pushing one foot toward the other must not leave them stacked. The box is tested where the
-    // foot will actually be, body and gather shifts included, and the push is recomputed from the animation every frame
-    // rather than accumulated, so it cannot drift. Weighted by planted so a foot lifting off near a wall lets go smoothly.
+    // Keeps the boot out of walls wherever it stands. Runs before the stance rule, which keeps the final say: a wall
+    // pushing one foot toward the other must not stack them. Recomputed from the animation every frame, never
+    // accumulated, so it cannot drift.
     private void PushFromWalls(ref Frame f, int s, ref FootSnapshot foot)
     {
         var c = this.Settings;
@@ -525,10 +461,9 @@ public sealed unsafe partial class Plugin
             if (toeLen > 1e-4f)
             {
                 facing /= toeLen;
-                var box = new FootBox(toeLen + half, half, half, foot.Rest * f.Scale.Y * 0.6f);
                 var placed = foot.AnkleWorld + Vector3.Transform(f.Scale * (f.St.GatherShift[s] + f.St.BodyShift) * f.St.Blend, f.Rot);
                 var groundY = f.OriginY + (foot.GroundModelY * f.Scale.Y);
-                var pushWorld = this.WallPush(placed, facing, in box, groundY, in f);
+                var pushWorld = this.WallPush(placed, facing, ahead: toeLen + half, clearance: half, height: foot.Rest * f.Scale.Y * 0.6f, groundY, in f);
                 want = Vector3.Transform(pushWorld, Quaternion.Inverse(f.Rot)) / f.Scale * foot.Planted;
                 want.Y = 0f;
             }
@@ -567,17 +502,13 @@ public sealed unsafe partial class Plugin
         var dMin2 = l1 * l1 + l2 * l2 - (2f * l1 * l2 * MathF.Cos(interior));
         foot.MaxRaiseByKnee = MathF.Max(0f, -v.Y - MathF.Sqrt(MathF.Max(0f, dMin2 - vxz2)));
 
-        // Terrain and the animation's own lift are kept apart: the pelvis follows terrain only, so a run's flight phase
-        // keeps its bounce instead of being pulled to the floor.
-        foot.Delta = foot.GroundModelY + foot.Rest - foot.AnkleModel.Y;
         if (foot.Planted > 0)
         {
             // Where the terrain under this foot asks the body to sit.
             body.WantSum += foot.GroundModelY * foot.Planted;
             body.WantWeight += foot.Planted;
 
-            // The body cannot rise past the point where this leg can no longer reach its ground, nor sink past the point
-            // where this knee folds tighter than allowed. A partly weighted foot only constrains in proportion.
+            // The body cannot rise past this leg's reach, nor sink past its knee cap, in proportion to the foot's weight.
             var reachLimit = foot.MaxExtend + foot.GroundModelY;
             var kneeLimit = foot.GroundModelY - foot.MaxRaiseByKnee;
             body.Hi = MathF.Min(body.Hi, reachLimit < 0 ? reachLimit * foot.Planted : reachLimit);
@@ -586,9 +517,8 @@ public sealed unsafe partial class Plugin
 
         if (foot.Gathered)
         {
-            // Stand tall on a narrow support: spend part of the legs' remaining extension on height. Part of the leg with the
-            // least to spare: a preference must never drive the other leg to its limit, where a foot on tiptoe beside a
-            // flat one would leave the flat foot straight-legged and floating.
+            // Stand tall on a narrow support, spending the leg with the least extension to spare: a preference must never
+            // drive the other leg straight, where the foot beside it would float.
             body.GatherWant = MathF.Min(body.GatherWant, foot.MaxExtend * c.GatherStraighten);
         }
     }
@@ -601,8 +531,7 @@ public sealed unsafe partial class Plugin
             return;
         }
 
-        // Shifting by the terrain height under the foot, minus what the pelvis already took, keeps the clearance the
-        // animation gave it over flat ground.
+        // Terrain height minus what the pelvis already took, so the foot keeps the clearance the animation gave it.
         var slopeTan = foot.HitNormal.Y > 0.2f ? MathF.Sqrt(MathF.Max(0f, 1f - foot.HitNormal.Y * foot.HitNormal.Y)) / foot.HitNormal.Y : 0f;
         var offset = foot.GroundModelY - applied + MathF.Max(0f, foot.Rest - foot.AnkleModel.Y) + c.SlopeLiftFrac * f.LegLen * slopeTan;
         offset = offset < 0
@@ -610,8 +539,7 @@ public sealed unsafe partial class Plugin
             : MathF.Min(offset, MathF.Min(f.MaxRaise, foot.MaxRaiseByKnee));
         foot.Offset = offset * f.St.Blend;
 
-        // Tilt only while the sole is at ground level: a heel-striking or lifting foot keeps the animation's own pitch,
-        // otherwise uphill running bends the toes up twice.
+        // Tilt only while the sole is at ground level, or uphill running bends the toes up twice.
         foot.Contact = Math.Clamp(1f - (foot.AnkleModel.Y - foot.Rest) / MathF.Max(c.TiltFadeFrac * f.LegLen, 1e-3f), 0f, 1f);
         var tilt = Quaternion.Identity;
         var nModel = Vector3.Transform(foot.HitNormal, Quaternion.Inverse(f.Rot));
@@ -628,8 +556,8 @@ public sealed unsafe partial class Plugin
             }
         }
 
-        // Gathered feet yaw toward the bind forward: Hrothgar knees splay outward, which reads wrong once the feet are
-        // together. Only with the sole down: yawing a foot poised on its toes bends it inward.
+        // Gathered feet yaw toward the bind forward (Hrothgar knees splay outward). Only with the sole down: yawing a
+        // foot poised on its toes bends it inward.
         var gatherBlend = Math.Clamp(foot.GatherShift.Length() / MathF.Max(0.05f * f.LegLen, 1e-3f), 0f, 1f) * c.GatherForward * foot.Contact * f.St.Blend;
         var ankleDelta = tilt;
         if (gatherBlend > 0.001f)
@@ -655,13 +583,8 @@ public sealed unsafe partial class Plugin
         }
     }
 
-    // Seated on the ground the body rests on the slope instead of standing on it: the whole pose turns about the origin
-    // so its up matches the ground plane, read from four probes half a leg length out. Weighted by how far down the body
-    // is, since the sit-down animation starts upright and an upright body tilted to the slope reads as falling over.
-    // Open just below standing, or a character still on its feet tilts, and full where the legs switch off, so the tilt
-    // rides the sit-down animation down instead of arriving after it. Pinned full while a floor emote is actually
-    // running, or a rep of /pushups would swing the tilt with the hips; once it ends the ramp takes over again and the
-    // tilt leaves with the body on the way up.
+    // How far down the body is, which weights the tilt: the sit-down animation starts upright, and an upright body
+    // tilted to the slope reads as falling over. Pinned full while a floor emote runs, or /pushups swings it every rep.
     private static float Low(in Frame f, in Snapshot snap) => f.St.FloorLoop && snap.Mode == CharacterModes.EmoteLoop
         ? 1f
         : Math.Clamp((StandingHips - f.St.HipFrac) / (StandingHips - FloorHips), 0f, 1f);
@@ -670,16 +593,15 @@ public sealed unsafe partial class Plugin
     {
         var c = this.Settings;
         var target = Quaternion.Identity;
-        // Sitting always, lying down by choice: the ground plane comes from four probes half a leg out from the origin,
-        // which for a prone body samples ground beside the torso rather than under the hands and toes it rests on.
+        // Sitting always, lying down by choice.
         if (poseOk && snap.OnFloor && c.MaxSitTiltDeg > 0f && (c.FloorTilt || !f.St.FloorLoop))
         {
             var r = 0.5f * f.LegLen * f.Scale.Y;
             var fwd = new Vector3(MathF.Sin(f.Yaw), 0f, MathF.Cos(f.Yaw));
             var side = new Vector3(fwd.Z, 0f, -fwd.X);
             var cap = c.MaxSitTiltDeg * MathF.PI / 180f;
-            // A prone body is fitted to what it lies on; a seated one has its contacts under itself, where the four
-            // probes around the origin already sample the right ground.
+            // A prone body is fitted to what it lies on; a seated one has its contacts under itself, where four probes
+            // around the origin already sample the right ground.
             if (f.St.FloorLoop && this.ContactTilt(ref f, fwd, side, cap, out var fitted))
             {
                 target = Quaternion.Slerp(Quaternion.Identity, fitted, Low(in f, in snap));
@@ -725,9 +647,8 @@ public sealed unsafe partial class Plugin
             return;
         }
 
-        // The lean is additive on the animated spine, so measure the animated pitch first and use only the room left
-        // between the floor and the cap. A male Hrothgar idles already well pitched forward; an upright race leaning back
-        // downhill must not end up arched past vertical.
+        // The lean is additive on the animated spine, so measure the animated pitch first and use only the room left.
+        // A male Hrothgar idles already well pitched forward.
         var spineDir = Bones.Pos(in f.Bones[f.St.Chain.Neck]) - Bones.Pos(in f.Bones[f.St.Chain.SpineA]);
         var pitch = MathF.Atan2(Vector3.Dot(spineDir, f.St.Chain.BindForward), spineDir.Y);
         snap.SpinePitchDeg = pitch * 180f / MathF.PI;

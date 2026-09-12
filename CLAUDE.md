@@ -78,7 +78,8 @@ The csproj **is** the plugin manifest (Name, Punchline, Description, Tags…). *
 - **Explicit usings**, ordered System → Dalamud → FFXIVClientStructs. No global usings.
 - **`sealed`** on concrete classes; `Plugin` is `sealed unsafe partial`.
 - **Plain mutable structs for per-frame data** (`Frame`, `Snapshot`, `FootSnapshot`, `Xf`, `LegChain`) — scratch state read by the overlay, not value objects. Don't convert them to records.
-- **Comments are rare and state a constraint**, never narration: a game-client fact (`[PluginService]` is `AttributeTargets.Property`; the allocator reuses skeleton addresses), a trap, a reverted experiment, or a `docs/PLAN.md` reference. Prefer a clearer name.
+- **Comments are rare and state a constraint**, never narration: a game-client fact (`[PluginService]` is `AttributeTargets.Property`; the allocator reuses skeleton addresses), a trap, or a reverted experiment. Prefer a clearer name.
+- **Comments are self-contained.** No milestone ids, no `docs/PLAN.md` pointers, nothing that needs the docs to read: someone opening the file cold gets the whole reason from the comment. Name the experiment and why it failed, not where it is written up. `docs/PLAN.md` still records everything in full — it is the archive, not a dependency of the code.
 - **Signature strings live only in the consts at the top of `Plugin.cs`**, each with its provenance comment.
 - **Dispose discipline** — hooks disposed, offsets undone, command and UiBuilder handlers removed, in reverse order.
 - **Thread discipline** — game reads and pose writes only inside the render detour; ImGui only in `Draw`; the overlay reads the `Snap` written once per tick. No I/O anywhere on that path.

@@ -132,9 +132,8 @@ public sealed unsafe partial class Plugin
 
             var pb = pp->ModelPose.Data;
             // Never n_root, bone 0 of the body: the game reads it back to see how far the animation has carried the
-            // character, so turning it turns out to move the character, and the camera re-anchors to where it lands.
-            // Only the body's: bone 0 of a face or hair partial is what fastens it to the head, and leaving that one
-            // behind while its children turn tears the head apart (2026-09-11, both halves seen in game).
+            // character, so turning it moves the character and the camera re-anchors. Only the body's, though: bone 0 of
+            // a face or hair partial fastens it to the head, and leaving it behind tears the head apart (seen in game).
             for (var k = p == 0 ? 1 : 0; k < pp->ModelPose.Length; k++)
             {
                 var x = Bones.Read(in pb[k]);
