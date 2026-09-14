@@ -62,14 +62,18 @@ public sealed class Settings : IPluginConfiguration
     public float LeanTau = 0.3f;
 
     public bool Bump;
-    public float BumpRadiusFrac = 0.35f; // half the centre distance at which two bodies touch, in leg lengths
+    public bool Shoved = true;           // someone running into you counts, not only you running into them
+    public bool Grunt;                   // both bodies play their own damage-taken voice line on a bump
+    public float BumpRadiusFrac = 0.45f; // half the centre distance at which two bodies touch, in leg lengths
     public float BumpMinSpeed = 1f;      // m/s closing on them, a world speed like StillSpeed
-    public float BumpMaxDeg = 20f;
+    public float BumpMaxDeg = 25f;
     public float BumpRiseSeconds = 0.08f;
     public float BumpTau = 0.5f;
-    public float BumpBodyTurn = 0.6f;     // share of the turn the whole body takes at running speed, feet included
-    public float BumpCooldown = 0.5f;     // s between any two bumps
-    public float BumpSameCooldown = 2f;   // s before the same character counts again
+    public float BumpBodyTurn = 1f;       // share of the turn the whole body takes at running speed, feet included
+    public float BumpShoveFrac = 0.2f;    // how far the hips are carried off the planted feet, in leg lengths
+    public float BumpHeadHold = 1f;       // how much of the spine turn and body yaw the neck undoes, so the head holds still
+    public float BumpCooldown = 0.6f;     // s between any two bumps
+    public float BumpSameCooldown = 0.9f; // s before the same character counts again
 
     public bool Emotes = true;
     public float MaxSitTiltDeg = 20f;

@@ -36,6 +36,7 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
     [PluginService] internal static IGameGui             GameGui     { get; private set; } = null!;
     [PluginService] internal static IDataManager         Data        { get; private set; } = null!;
     [PluginService] internal static ICommandManager      Commands    { get; private set; } = null!;
+    [PluginService] internal static IFramework           Framework   { get; private set; } = null!;
 
     public Settings Settings { get; }
 
@@ -110,6 +111,7 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.Draw += this.windows.Draw;
         PluginInterface.UiBuilder.Draw += this.overlay.DrawWorldDots;
         PluginInterface.UiBuilder.Draw += this.UpdateMesh;
+        Framework.Update += this.PlayGrunts;
         PluginInterface.UiBuilder.OpenMainUi += this.overlay.Toggle;
         PluginInterface.UiBuilder.OpenConfigUi += this.overlay.Toggle;
         Commands.AddHandler("/ik", new CommandInfo((_, _) => this.overlay.Toggle()) { HelpMessage = "Toggle the Inverse Kinematics window." });
@@ -295,6 +297,7 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
         this.moveHook?.Dispose();
 
         Commands.RemoveHandler("/ik");
+        Framework.Update -= this.PlayGrunts;
         PluginInterface.UiBuilder.Draw -= this.windows.Draw;
         PluginInterface.UiBuilder.Draw -= this.overlay.DrawWorldDots;
         PluginInterface.UiBuilder.Draw -= this.UpdateMesh;

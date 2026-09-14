@@ -235,6 +235,38 @@ public sealed unsafe partial class Plugin
         }
     }
 
+    // Shifts the whole model-space pose, n_root and the partials handled exactly as RotateBody handles them. With the
+    // feet then solved back to where they stood, this is what bends the knees: the hips go and the legs must reach.
+    private static void TranslateBody(Skeleton* skel, hkaPose* pose, Vector3 by)
+    {
+        for (var p = 0; p < skel->PartialSkeletonCount; p++)
+        {
+            var pp = p == 0 ? pose : skel->PartialSkeletons[p].GetHavokPose(0);
+            if (pp == null || pp->Skeleton == null || pp->ModelPose.Length != pp->Skeleton->Bones.Length)
+            {
+                continue;
+            }
+
+            if (pp->ModelInSync == 0)
+            {
+                pp->SyncModelSpace();
+            }
+
+            var pb = pp->ModelPose.Data;
+            for (var k = p == 0 ? 1 : 0; k < pp->ModelPose.Length; k++)
+            {
+                var x = Bones.Read(in pb[k]);
+                x.T += by;
+                if (x.IsFinite)
+                {
+                    Bones.Write(ref pb[k], in x);
+                }
+            }
+
+            pp->LocalInSync = 0;
+        }
+    }
+
     // turn is spread a third on each spine bone; neck goes on the neck bone on top of it, so the head can be held level.
     private static void ApplySpineLean(Skeleton* skel, hkaPose* pose, in LegChain chain, Quaternion turn, Quaternion neck)
     {

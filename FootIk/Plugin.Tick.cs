@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Numerics;
+using System.Runtime.InteropServices;
 using Dalamud.Game.ClientState.Objects.Enums;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
 using FFXIVClientStructs.FFXIV.Client.Graphics.Render;
@@ -45,6 +47,19 @@ public sealed unsafe partial class Plugin
 
     private const float StillSpeed = 0.15f; // m/s, not a *Frac: every race moves at the same world speed.
     private const float RunSpeed = 6f;      // m/s, a flat-out run on foot
+    private const float WarpSpeed = 30f;    // m/s: faster than any mount, so a step this large is a teleport, not travel
+
+    // Where a body near us stood when we last looked. Being run into needs the other one's speed, and the game keeps
+    // none we can read - MoveController carries only MovementState - so it is measured here rather than taken from a
+    // CharState, which only characters the plugin is already working on have.
+    private struct Neighbour
+    {
+        public ulong Id;
+        public Vector3 Pos;
+        public double Seen;
+    }
+
+    private readonly Dictionary<nint, Neighbour> neighbours = [];
 
     // Hip height over leg length: below FloorHips the character is on the floor rather than on its feet, and above
     // StandingHips it is clearly back on them. The Status tab reads it out; an idle pose measured over 0.85 in game.
@@ -127,9 +142,9 @@ public sealed unsafe partial class Plugin
             snap.HipFrac = st.HipFrac;
         }
 
-        if (local && active && c.Bump)
+        if (active && c.Bump)
         {
-            this.FindBump(chr, ref f);
+            this.FindBump(chr, ref f, local);
         }
 
         if (active)
@@ -698,17 +713,26 @@ public sealed unsafe partial class Plugin
     }
 
     // Characters have no collision with each other, so this is our own: centres a bump radius apart on the same
-    // floor, closing faster than a nudge. Ours takes the push; theirs takes the opposite when it is being ticked, so
-    // both bodies react. Two cooldowns: one between any two bumps, a longer one before the same character counts again.
-    private void FindBump(Character* chr, ref Frame f)
+    // floor, closing faster than a nudge. The one moving takes the push and the one it ran into takes the opposite, so
+    // running into someone and being run into both land. Every ticked character scans, not just the local player, which
+    // is what lets someone else shove you; a character slower than the threshold leaves before the scan, so a crowd
+    // standing still costs nothing. Two cooldowns: one between any two bumps, a longer one before the same character
+    // counts again.
+    private void FindBump(Character* chr, ref Frame f, bool local)
     {
         var c = this.Settings;
         var st = f.St;
-        if (st.BumpAge < c.BumpCooldown || f.Speed < c.BumpMinSpeed)
+
+        // Only you are worth scanning for while standing still: a bystander who has to be moving anyway costs nothing
+        // when the crowd is idle, and that early return is the whole bound on what this walk costs in a plaza.
+        var shoved = local && c.Shoved;
+        if (st.BumpAge < c.BumpCooldown || (f.Speed < c.BumpMinSpeed && !shoved))
         {
             return;
         }
 
+        var now = this.clock.Elapsed.TotalSeconds;
+        this.DropStaleNeighbours(now);
         var radius = c.BumpRadiusFrac * f.LegLen * f.Scale.Y;
         var myTop = chr->Height * chr->Scale;
         var vel = f.VelDir * f.Speed;
@@ -716,10 +740,14 @@ public sealed unsafe partial class Plugin
         for (var i = 0; i < Objects.Length; i++)
         {
             var o = Objects[i];
-            if (o == null || o.Address == 0 || o.GameObjectId == st.Id || o.ObjectKind is not (ObjectKind.Pc or ObjectKind.BattleNpc or ObjectKind.EventNpc))
+            // People only. BattleNpc is every monster, pet, egi, carbuncle, chocobo companion and trust, none of which
+            // should shove or be shoved; minions and mounts are their own kinds and were never in.
+            if (o == null || o.Address == 0 || o.GameObjectId == st.Id || o.ObjectKind is not (ObjectKind.Pc or ObjectKind.EventNpc))
             {
                 continue;
             }
+
+            var theirVel = shoved ? this.TrackNeighbour(o.Address, o.GameObjectId, o.Position, now) : Vector3.Zero;
 
             if (o.GameObjectId == st.BumpTarget && st.BumpAge < c.BumpSameCooldown)
             {
@@ -751,8 +779,11 @@ public sealed unsafe partial class Plugin
                 continue;
             }
 
+            // How fast the gap is closing, theirs counted as well as ours, so being run into while standing still
+            // lands exactly as running into them does.
             var dir = to / MathF.Sqrt(d2);
-            if (Vector3.Dot(vel, dir) < c.BumpMinSpeed)
+            var approach = Vector3.Dot(vel - theirVel, dir);
+            if (approach < c.BumpMinSpeed)
             {
                 continue;
             }
@@ -779,7 +810,9 @@ public sealed unsafe partial class Plugin
             st.BumpTarget = o.GameObjectId;
             st.BumpAge = Envelope(st.BumpAge, rise, c.BumpTau) * rise;
             st.BumpPush = -dir * Reaches(ratio);
-            st.BumpBody = Math.Clamp(f.Speed / RunSpeed, 0f, 1f);
+            // The closing speed rather than our own, so a sprinter running into someone standing still knocks them
+            // round as hard as running into them would have.
+            st.BumpBody = Math.Clamp(approach / RunSpeed, 0f, 1f);
             if (known != null)
             {
                 known.BumpAge = Envelope(known.BumpAge, rise, c.BumpTau) * rise;
@@ -787,10 +820,44 @@ public sealed unsafe partial class Plugin
                 known.BumpBody = Math.Clamp(known.Speed / RunSpeed, 0f, 1f);
             }
 
+            // Only bumps you are in: two strangers brushing past each other across the plaza is not something to make
+            // a noise about, and with a crowd being ticked it was most of them. Your own scan covers both directions,
+            // since being run into is found from here too.
+            if (local)
+            {
+                this.WantGrunt((nint)chr, st.Id);
+                this.WantGrunt(o.Address, o.GameObjectId);
+            }
+
             return;
         }
 
         static float Reaches(float ratio) => Math.Clamp((ratio - 0.4f) / 0.3f, 0f, 1f);
+    }
+
+    // Timed rather than counted in frames, so a body we looked away from for a while still reads a true speed. A step
+    // no mount could have travelled is a teleport or a zone load, and reads as standing rather than as a charge.
+    private Vector3 TrackNeighbour(nint addr, ulong id, Vector3 pos, double now)
+    {
+        ref var n = ref CollectionsMarshal.GetValueRefOrAddDefault(this.neighbours, addr, out var existed);
+        var dt = (float)(now - n.Seen);
+        // The allocator reuses addresses, so a changed spawn id means this is someone else and the old position is not theirs.
+        var vel = existed && n.Id == id && dt > 1e-4f ? (pos - n.Pos) / dt : Vector3.Zero;
+        n.Id = id;
+        n.Pos = pos;
+        n.Seen = now;
+        return float.IsFinite(vel.X + vel.Y + vel.Z) && vel.LengthSquared() <= WarpSpeed * WarpSpeed ? vel : Vector3.Zero;
+    }
+
+    private void DropStaleNeighbours(double now)
+    {
+        foreach (var (addr, n) in this.neighbours)
+        {
+            if (now - n.Seen > 1.0)
+            {
+                this.neighbours.Remove(addr);
+            }
+        }
     }
 
     // A straight rise, then a release that lingers at the peak before it falls: a Gaussian, where a plain exponential
@@ -836,20 +903,41 @@ public sealed unsafe partial class Plugin
         var twistAngle = Math.Clamp(-3f * across, -1f, 1f) * angle;
         var twist = Quaternion.CreateFromAxisAngle(Vector3.UnitY, twistAngle);
         // The twist goes innermost so the tip lands exactly along the push rather than swung round by the yaw.
-        ApplySpineLean(f.Skel, f.Pose, in st.Chain, lean * pitch * twist, Quaternion.Identity);
+        var turn = lean * pitch * twist;
+
+        // Read here rather than at the turn below because the head is held against this too: RotateBody carries the
+        // neck with everything else, so a counter applied before it has to undo both.
+        var bodyYaw = twistAngle * st.BumpBody * c.BumpBodyTurn;
+        var yawing = MathF.Abs(bodyYaw) >= 0.002f;
+        var q = yawing ? Quaternion.CreateFromAxisAngle(Vector3.UnitY, bodyYaw) : Quaternion.Identity;
+
+        // The head keeps the orientation the animation gave it, so the character goes on looking where it was looking
+        // while the shoulders and hips are carried out from under it. The spine reaches the neck having accumulated
+        // exactly `turn`, so undoing that and the rigid yaw holds the head still. A half counter was tried back when
+        // nothing but the spine moved and read as weak, hence a knob rather than a constant.
+        var hold = Math.Clamp(c.BumpHeadHold, 0f, 1f);
+        var neck = hold > 0.001f
+            ? Quaternion.Slerp(Quaternion.Identity, Quaternion.Inverse(q) * Quaternion.Inverse(turn), hold)
+            : Quaternion.Identity;
+        ApplySpineLean(f.Skel, f.Pose, in st.Chain, turn, neck);
 
         // At speed the whole body is knocked round as well, hips and all, while a standing body keeps the hit in its
         // shoulders. After the torso, so the torso axes are the animation's own; the rigid turn then carries torso,
         // head and partials together. The legs keep the stride: each ankle goes back where the animation had it, its
         // orientation turned back and the knee bending the way it did, so the hips go with the pelvis and the legs
         // re-bend to reach. Letting the feet swing round with the body read as the body sliding (seen in game).
-        var bodyYaw = twistAngle * st.BumpBody * c.BumpBodyTurn;
-        if (MathF.Abs(bodyYaw) < 0.002f)
+        // A shove moves you. Without this a body that was standing still took the hit entirely in its spine, hips and
+        // feet nailed to the floor, which read as bending at the waist rather than being shoved (seen in game); the
+        // one that was running looked right only because the turn above gave it the leg re-solve as a side effect.
+        // The knees are not posed: the hips are carried off the feet and the legs below bend because they must reach.
+        // Model space, so a fraction of the bind leg length needs no scale factor.
+        var shove = push / len * (c.BumpShoveFrac * f.LegLen * envelope * st.Blend * st.BumpPush.Length());
+        shove.Y = 0f;
+        if (!yawing && shove.LengthSquared() < 1e-8f)
         {
             return;
         }
 
-        var q = Quaternion.CreateFromAxisAngle(Vector3.UnitY, bodyYaw);
         Span<Vector3> ankle = stackalloc Vector3[2];
         Span<Vector3> bend = stackalloc Vector3[2];
         for (var s = 0; s < 2; s++)
@@ -859,7 +947,16 @@ public sealed unsafe partial class Plugin
             bend[s] = Bones.Pos(in f.Bones[leg.Knee]) - Bones.Pos(in f.Bones[leg.Hip]);
         }
 
-        RotateBody(f.Skel, f.Pose, q);
+        if (yawing)
+        {
+            RotateBody(f.Skel, f.Pose, q);
+        }
+
+        if (shove.LengthSquared() >= 1e-8f && float.IsFinite(shove.X + shove.Z))
+        {
+            TranslateBody(f.Skel, f.Pose, shove);
+        }
+
         var back = Quaternion.Inverse(q);
         for (var s = 0; s < 2; s++)
         {
