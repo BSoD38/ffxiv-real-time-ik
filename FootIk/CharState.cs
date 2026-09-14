@@ -26,6 +26,11 @@ internal sealed class CharState
     public readonly bool[] LatchNarrow = new bool[2]; // the latched target stands on a support about a boot wide or narrower
     public Vector3 BodyShift;      // model space
     public float Lean;             // radians
+    public float BumpAge = float.PositiveInfinity; // seconds since this body was last bumped
+    public Vector3 BumpPush;       // world, horizontal: the way it was pushed, at most a unit long, shorter for a hit below the shoulders
+    public ulong BumpTarget;       // the character last run into
+    public float BumpBody;         // 0..1, how much of the last bump turns the whole body, from the speed at impact
+    public float Speed;            // m/s over the last frame, for a bump that lands on this character
     public Quaternion Tilt = Quaternion.Identity;
 
     // Nothing of ours is left on the character: the offsets are off and the pose is the animation's own again.

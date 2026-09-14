@@ -56,6 +56,9 @@ public struct Snapshot
     public float Speed;
     public float LeanDeg;
     public float SpinePitchDeg;
+    public float BumpDeg;
+    public float Height; // the game's own reading of the body's height, what bumps compare
+    public int Weapons;  // carried weapons found fastened to the body this frame
     public bool OnFloor;
     public float SitTiltDeg;
     public float HipFrac;

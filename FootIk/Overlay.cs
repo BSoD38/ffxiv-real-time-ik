@@ -241,6 +241,7 @@ internal sealed class Overlay : Window
     private void DrawLean()
     {
         var c = this.plugin.Settings;
+        var L = this.plugin.Snap.LegLength;
 
         this.Check("Lean into slopes", ref c.SlopeLean);
         Help("While moving, makes the character lean forwards or backwards when running uphill and downhill.");
@@ -256,6 +257,26 @@ internal sealed class Overlay : Window
             "How far the character can lean in either direction.");
         ImGui.EndDisabled();
 
+        Section("Carried weapons");
+        this.Check("Weapons follow the body", ref c.MoveWeapons);
+        Help("Sheathed weapons and shields ride along when the upper body leans, turns or tilts, instead of staying where the animation left them. Turn it off if a weapon ends up floating.");
+
+        Section("Bumping into people");
+        this.Check("Flinch when running into someone", ref c.Bump);
+        Help("When you run or walk into another character, your upper body tips away from them for a moment, as if shoved. Only you see it. They flinch too when the plugin is also placing their feet. Someone sitting or lying down, or shorter than your waist, cannot reach your upper body: it stays put while they take the shove.");
+        ImGui.BeginDisabled(!c.Bump);
+        this.Slider("Bump distance", ref c.BumpRadiusFrac, 0.1f, 0.8f, $"%.2f  ({c.BumpRadiusFrac * 2f * L:F2} m apart)",
+            "How close two characters must come to count as touching. Too low and you pass through people without a reaction; too high and you flinch at people you clearly missed.");
+        this.Slider("Bump strength", ref c.BumpMaxDeg, 0f, 60f, "%.0f deg",
+            "How far the upper body tips away and turns towards the other character at the moment of impact.");
+        this.Slider("Whole-body turn", ref c.BumpBodyTurn, 0f, 1.5f, "%.2f",
+            "How much of the turn the whole body takes at running speed, hips and all, on top of the shoulders; the legs keep following the stride. Zero keeps every bump in the upper body; standing characters always do.");
+        this.Slider("Bump cooldown", ref c.BumpCooldown, 0f, 3f, "%.1f s",
+            "The least time between two bumps, whoever they are with. Raise it if a crowd keeps your character flinching.");
+        this.Slider("Same character", ref c.BumpSameCooldown, 0f, 10f, "%.1f s",
+            "How long before running into the same character again counts as a new bump.");
+        ImGui.EndDisabled();
+
         if (Advanced())
         {
             this.Slider("Max spine pitch", ref c.MaxTotalPitchDeg, 10f, 90f, "%.0f deg",
@@ -264,6 +285,12 @@ internal sealed class Overlay : Window
                 "Limits how far back the character may lean, taking account of their base animation. Avoids upright races arching backwards when running downhill.");
             this.Slider("Lean smoothing", ref c.LeanTau, 0.05f, 1f, "%.2f s",
                 "Smoothing on the lean angle, so a sudden change in terrain does not snap the torso.");
+            this.Slider("Bump speed", ref c.BumpMinSpeed, 0.2f, 6f, "%.1f m/s",
+                "How fast you must be moving towards someone for it to count as a bump. Set it above walking speed and only running bumps.");
+            this.Slider("Bump rise", ref c.BumpRiseSeconds, 0.02f, 0.3f, "%.2f s",
+                "How quickly the body reaches its full flinch after the impact.");
+            this.Slider("Bump recovery", ref c.BumpTau, 0.1f, 1.5f, "%.2f s",
+                "How long the body takes to straighten up again.");
         }
     }
 
@@ -277,7 +304,7 @@ internal sealed class Overlay : Window
 
         ImGui.BeginDisabled(!c.Emotes);
         this.Check("Tilt lying-down poses too", ref c.FloorTilt);
-        Help("Turns the body to follow the slope when lying on the ground, not just when sitting. Affects emotes like pushups and playing dead. Turn it off if the tilt reads worse than leaving the animation alone.");
+        Help("Turns the body to follow the slope when lying on the ground, not just when sitting. Affects emotes like pushups and playing dead. Turn it off if the tilt looks worse than leaving the animation alone.");
         this.Slider("Max sit tilt", ref c.MaxSitTiltDeg, 0f, 45f, "%.0f deg",
             "How far the body may tilt to rest on sloped ground when sitting or sleeping on it. Zero keeps the body upright.");
         this.Slider("Sit tilt smoothing", ref c.SitTiltTau, 0.05f, 1.5f, "%.2f s",
@@ -357,7 +384,7 @@ internal sealed class Overlay : Window
 
         Section("Your character");
         ImGui.TextUnformatted(Activity(in s, c.Enabled));
-        ImGui.TextUnformatted($"Body height {Cm(s.Applied)}   lean {s.LeanDeg:F0} deg   tilt to the ground {s.SitTiltDeg:F0} deg");
+        ImGui.TextUnformatted($"Body height {Cm(s.Applied)}   lean {s.LeanDeg:F0} deg   bump {s.BumpDeg:F0} deg   tilt to the ground {s.SitTiltDeg:F0} deg");
 
         Section("Feet");
         ref var l = ref s.Left;
@@ -397,7 +424,7 @@ internal sealed class Overlay : Window
             }
 
             ImGui.TextUnformatted($"Ground under body {s.BaseY:F3}   body shift {Fmt(s.BodyShift)}");
-            ImGui.TextUnformatted($"Spine pitch {s.SpinePitchDeg:F1} deg   lean {s.LeanDeg:F1} deg");
+            ImGui.TextUnformatted($"Spine pitch {s.SpinePitchDeg:F1} deg   lean {s.LeanDeg:F1} deg   body height {s.Height:F2}   weapons following {s.Weapons}");
             ImGui.TextUnformatted($"On the floor {s.OnFloor}   hips {s.HipFrac:F2}   body tilt {s.SitTiltDeg:F1} deg");
             if (s.HasPose && !s.ChainResolved)
             {
@@ -442,12 +469,36 @@ internal sealed class Overlay : Window
             }
             else
             {
+                p.MeshDetail = true;
                 ImGui.TextUnformatted(p.MeshStatus);
                 ImGui.TextUnformatted($"Parts {p.MeshParts}, with collider in range {p.MeshWithCollider}, terrain plates {p.MeshPlates}, unreadable {p.MeshFailed}");
                 ImGui.TextUnformatted($"Scan {p.MeshScanMs:F1} ms   build (worker) {p.MeshBuildMs:F1} ms, max {p.MeshBuildMaxMs:F1}");
                 ImGui.TextUnformatted($"Refined {p.MeshRefined}   missed {p.MeshMissed}   last delta {p.MeshLastDelta:+0.000;-0.000} m");
+                ImGui.TextWrapped($"Last refined by {p.MeshLastPath}  ({(p.MeshLastSolid ? "collider" : "NO collider")}, triangle {p.MeshLastSpan:F0} m wide, facing {(p.MeshLastUp ? "up" : "down")})");
                 ImGui.TextUnformatted($"Rays this frame {p.MeshRaysPerFrame} over {p.MeshObjects} objects = {p.MeshRaysPerFrame * p.MeshObjects} bounds tests");
                 ImGui.TextWrapped($"Terrain plate: {p.MeshPlateSample}");
+                ImGui.Spacing();
+                ImGui.TextDisabled("Parts whose footprint contains you, nearest surface first, and what they hold under you.");
+                if (p.MeshUnder.Count == 0)
+                {
+                    ImGui.TextDisabled("Reading, on the next scan.");
+                }
+
+                foreach (var (_, line) in p.MeshUnder)
+                {
+                    ImGui.TextWrapped(line);
+                }
+
+                if (p.MeshHuge.Count > 0)
+                {
+                    ImGui.Spacing();
+                    ImGui.TextDisabled($"Never read: bounding sphere over {Plugin.MeshMaxSphere:F0} m.");
+                    foreach (var line in p.MeshHuge)
+                    {
+                        ImGui.TextWrapped(line);
+                    }
+                }
+
                 ImGui.Spacing();
                 ImGui.TextDisabled($"Parts within 6 m of you ({p.MeshOrigin.X:F1}, {p.MeshOrigin.Z:F1}). A centre far from the part you stand on means its placement is not world-space.");
                 foreach (var (_, line) in p.MeshNearby)

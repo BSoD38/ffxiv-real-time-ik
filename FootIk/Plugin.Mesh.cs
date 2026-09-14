@@ -15,15 +15,23 @@ namespace FootIk;
 
 // Experimental: the ground height read off the visible level geometry. Collision still finds the ground and gates
 // everything; the render mesh only moves a hit collision already made, and only within a band of it. Within that band
-// a part that carries a collider (or the terrain) is authoritative, and a part without one only fills the gaps: a bush
-// on the terrain loses to the terrain, while a staircase whose ramp collision lives on a neighbouring part with no
-// render mesh of its own is the only surface there and wins. Skipping collider-less parts outright lost those stairs.
+// the surface nearest the hit wins, a part that carries a collider (or the terrain) only on a tie: giving those priority
+// took the foot down to the terrain under a raised collider-less floor wherever the two came close. A staircase whose
+// ramp collision lives on a neighbouring part with no render mesh of its own is the only surface there and wins.
+// Skipping collider-less parts outright lost those stairs.
 public sealed unsafe partial class Plugin
 {
     private const float MeshCell = 1f; // metres: a property of the level, not of the character
     private const float MeshNearRange = 6f; // metres from you: which parts the Mesh tab lists
-    private const float MeshMaxSpan = 64f; // metres: no walkable triangle is this wide, sky domes and vistas are
-    private const float MeshMaxSphere = 200f; // metres: a bounding sphere this large is scenery, never a floor
+    private const float MeshMaxSpan = 64f; // metres: a triangle wider than this is bucketed on a grid this coarse instead of the 1 m one
+    private const float MeshMaxWide = 4096f; // metres: bounds the coarse-grid inserts per triangle; nothing walkable has come close
+    internal const float MeshMaxSphere = 2500f; // metres: real floor parts have carried spheres of 2428 m; this only keeps out the sky
+
+    // A sphere that size cannot say whether a part is within the radius, so the radius no longer bounds what is held:
+    // these do. Both are soft - a build already queued still finishes - and both free themselves again as the parts
+    // behind you fall out of range and are dropped.
+    private const int MeshMaxTriangles = 1_000_000; // over every part held: about 36 MB of vertices before the grids
+    private const int MeshMaxInserts = 500_000;     // cell inserts within one part, 25x what a building has needed
 
     // One placed object: its world-space triangles, three vertices each, bucketed on an XZ grid. Built once on the
     // worker when it enters the radius and dropped when it leaves, so moving never rebuilds what is already there.
@@ -40,9 +48,13 @@ public sealed unsafe partial class Plugin
         public int Stamp;
         public bool Built;
         public int Kept;
+        public int Dropped;
+        public bool Queued;
+        public bool Parented;
         public Vector3[] Tris = [];
         public float MinX, MaxX, MinZ, MaxZ;
         public Dictionary<long, List<int>> Cells = [];
+        public Dictionary<long, List<int>> Wide = [];
     }
 
     private struct Candidate
@@ -75,6 +87,8 @@ public sealed unsafe partial class Plugin
     private readonly ConcurrentQueue<MeshEntry> toBuild = new();
     private readonly ConcurrentQueue<MeshEntry> built = new();
     private readonly List<(float Dist, string Line)> nearby = [];
+    private readonly List<(float Dist, string Line)> under = [];
+    private readonly List<string> huge = [];
     private Task? worker;
     private volatile bool meshStop;
     private volatile bool meshFlush;
@@ -88,6 +102,17 @@ public sealed unsafe partial class Plugin
     public string MeshPlateSample { get; private set; } = string.Empty;
     public Vector3 MeshOrigin { get; private set; }
     public IReadOnlyList<(float Dist, string Line)> MeshNearby => this.nearby;
+    public IReadOnlyList<(float Dist, string Line)> MeshUnder => this.under;
+    public IReadOnlyList<string> MeshHuge => this.huge;
+
+    // Raised by the Mesh tab each frame it is open and cleared once the scan has read it: the lists above cost real
+    // work to fill and nothing but that tab reads them.
+    public bool MeshDetail { get; set; }
+
+    public string MeshLastPath { get; private set; } = string.Empty;
+    public bool MeshLastSolid { get; private set; }
+    public bool MeshLastUp { get; private set; }
+    public float MeshLastSpan { get; private set; }
     public int MeshParts { get; private set; }
     public int MeshWithCollider { get; private set; }
     public int MeshPlates { get; private set; }
@@ -152,7 +177,9 @@ public sealed unsafe partial class Plugin
                 this.worker = Task.Run(this.BuildLoop);
             }
 
-            this.MeshStatus = $"{this.entries.Count} objects, {this.toBuild.Count} to build, {this.MeshTriangles} triangles";
+            var full = this.MeshTriangles >= MeshMaxTriangles ? ", at the triangle budget" : string.Empty;
+            this.MeshStatus = $"{this.entries.Count} objects, {this.toBuild.Count} to build, {this.MeshTriangles} triangles{full}";
+            this.MeshDetail = false;
         }
         catch (Exception ex)
         {
@@ -180,6 +207,7 @@ public sealed unsafe partial class Plugin
         this.stamp++;
         this.MeshOrigin = origin;
         this.nearby.Clear();
+        this.huge.Clear();
         var parts = 0;
         var inRange = 0;
         var key = InstanceType.BgPart;
@@ -203,13 +231,24 @@ public sealed unsafe partial class Plugin
                 Vector3 pos = gfx->Position;
                 var dist = Vector3.Distance(pos, origin);
                 var sphere = inst->BoundingSphereSize;
-                if (dist > radius + sphere || sphere > MeshMaxSphere)
+                if (sphere > MeshMaxSphere)
+                {
+                    if (this.huge.Count < 8)
+                    {
+                        this.huge.Add($"{gfx->ModelResourceHandle->FileName.ToString()}  {dist:F1} m, sphere {sphere:F1}");
+                    }
+
+                    continue;
+                }
+
+                if (dist > radius + sphere)
                 {
                     continue;
                 }
 
                 var solid = inst->Collider != null;
                 var e = this.Track((nint)inst, pos, gfx->Rotation, gfx->Scale, solid, &gfx->ModelResourceHandle->FileName);
+                e.Parented = gfx->ParentObject != null;
                 if (solid)
                 {
                     inRange++;
@@ -217,7 +256,7 @@ public sealed unsafe partial class Plugin
 
                 if (dist - sphere < MeshNearRange && this.nearby.Count < 16)
                 {
-                    var state = !e.Built ? "queued" : $"{e.Kept} triangles, centre {(e.MinX + e.MaxX) / 2:F1}, {(e.MinZ + e.MaxZ) / 2:F1}";
+                    var state = !e.Built ? "queued" : $"{e.Kept} triangles, {e.Dropped} dropped, centre {(e.MinX + e.MaxX) / 2:F1}, {(e.MinZ + e.MaxZ) / 2:F1}";
                     this.nearby.Add((dist, $"{e.Path}  {dist:F1} m, sphere {sphere:F1}, {(solid ? "collider" : "NO collider")}, {state}"));
                 }
             }
@@ -275,6 +314,30 @@ public sealed unsafe partial class Plugin
             }
         }
 
+        // Only while the tab that shows it is open: an unbounded band over every entry whose footprint contains you is
+        // real work, and with zone-sized footprints in the list that is most of them.
+        this.under.Clear();
+        if (this.MeshDetail)
+        {
+            foreach (var e in this.entries.Values)
+            {
+                if (!e.Built || origin.X < e.MinX || origin.X > e.MaxX || origin.Z < e.MinZ || origin.Z > e.MaxZ)
+                {
+                    continue;
+                }
+
+                var found = TryNearest(e, origin.X, origin.Z, origin.Y, float.MaxValue, float.MaxValue, out _, out var y);
+                var surface = found ? $"surface {y - origin.Y:+0.00;-0.00} m from your feet" : "no triangle under you";
+                this.under.Add((found ? MathF.Abs(y - origin.Y) : float.MaxValue, $"{e.Path}  {(e.Solid ? "collider" : "NO collider")}{(e.Parented ? ", parented" : string.Empty)}, {e.Kept} triangles, {e.Dropped} dropped, {surface}"));
+            }
+
+            this.under.Sort((a, b) => a.Dist.CompareTo(b.Dist));
+            if (this.under.Count > 16)
+            {
+                this.under.RemoveRange(16, this.under.Count - 16);
+            }
+        }
+
         this.MeshScanMs = Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
     }
 
@@ -286,10 +349,18 @@ public sealed unsafe partial class Plugin
         {
             e = new MeshEntry { Key = key, Path = name->ToString(), Pos = pos, Rot = rot, Scale = scale, Solid = solid };
             this.entries[key] = e;
-            this.toBuild.Enqueue(e);
         }
 
         e.Stamp = this.stamp;
+
+        // Over the budget the part is held as an empty stub and queued on a later scan instead, once what you have
+        // walked away from has freed the room. Queued only ever once, so the worker never rebuilds a live entry.
+        if (!e.Queued && this.MeshTriangles < MeshMaxTriangles)
+        {
+            e.Queued = true;
+            this.toBuild.Enqueue(e);
+        }
+
         return e;
     }
 
@@ -350,12 +421,16 @@ public sealed unsafe partial class Plugin
             tris[i] = e.Pos + Vector3.Transform(e.Scale * local[i], e.Rot);
         }
 
-        // A sky dome or a distant vista has triangles hundreds of metres wide, and a non-finite vertex floors to
-        // int.MinValue: either turns the bucketing below into billions of cell inserts and hung the client once.
+        // A non-finite vertex floors to int.MinValue, and a triangle kilometres wide covers millions of 1 m cells: either
+        // turned the bucketing into billions of inserts and hung the client once. Wide triangles go on the coarse grid
+        // instead, since real floor parts have triangles wider than 64 m, and beyond MeshMaxWide they are dropped. The
+        // width bounds one triangle's inserts, not the model's, so the running count stops a mesh of wide triangles.
         e.MinX = e.MinZ = float.MaxValue;
         e.MaxX = e.MaxZ = float.MinValue;
         var cells = new Dictionary<long, List<int>>();
+        var wide = new Dictionary<long, List<int>>();
         var kept = 0;
+        var inserts = 0;
         for (var t = 0; t + 2 < tris.Length; t += 3)
         {
             var a = tris[t];
@@ -365,8 +440,10 @@ public sealed unsafe partial class Plugin
             var maxX = MathF.Max(a.X, MathF.Max(b.X, c.X));
             var minZ = MathF.Min(a.Z, MathF.Min(b.Z, c.Z));
             var maxZ = MathF.Max(a.Z, MathF.Max(b.Z, c.Z));
-            if (!float.IsFinite(minX + maxX + minZ + maxZ + a.Y + b.Y + c.Y) || maxX - minX > MeshMaxSpan || maxZ - minZ > MeshMaxSpan)
+            if (!float.IsFinite(minX + maxX + minZ + maxZ + a.Y + b.Y + c.Y) || maxX - minX > MeshMaxWide || maxZ - minZ > MeshMaxWide
+                || inserts >= MeshMaxInserts)
             {
+                e.Dropped++;
                 continue;
             }
 
@@ -375,30 +452,69 @@ public sealed unsafe partial class Plugin
             e.MaxX = MathF.Max(e.MaxX, maxX);
             e.MinZ = MathF.Min(e.MinZ, minZ);
             e.MaxZ = MathF.Max(e.MaxZ, maxZ);
-            var x1 = (int)MathF.Floor(maxX / MeshCell);
-            var z1 = (int)MathF.Floor(maxZ / MeshCell);
-            for (var x = (int)MathF.Floor(minX / MeshCell); x <= x1; x++)
-            {
-                for (var z = (int)MathF.Floor(minZ / MeshCell); z <= z1; z++)
-                {
-                    if (!cells.TryGetValue(Cell(x, z), out var cell))
-                    {
-                        cells[Cell(x, z)] = cell = [];
-                    }
-
-                    cell.Add(t);
-                }
-            }
+            inserts += maxX - minX > MeshMaxSpan || maxZ - minZ > MeshMaxSpan
+                ? Bucket(wide, t, minX, maxX, minZ, maxZ, MeshMaxSpan)
+                : Bucket(cells, t, minX, maxX, minZ, maxZ, MeshCell);
         }
 
         e.Tris = tris;
         e.Cells = cells;
+        e.Wide = wide;
         e.Kept = kept;
+    }
+
+    private static int Bucket(Dictionary<long, List<int>> grid, int tri, float minX, float maxX, float minZ, float maxZ, float size)
+    {
+        var n = 0;
+        var x1 = (int)MathF.Floor(maxX / size);
+        var z1 = (int)MathF.Floor(maxZ / size);
+        for (var x = (int)MathF.Floor(minX / size); x <= x1; x++)
+        {
+            for (var z = (int)MathF.Floor(minZ / size); z <= z1; z++)
+            {
+                if (!grid.TryGetValue(Cell(x, z), out var cell))
+                {
+                    grid[Cell(x, z)] = cell = [];
+                }
+
+                cell.Add(tri);
+                n++;
+            }
+        }
+
+        return n;
     }
 
     private static long Cell(int x, int z) => ((long)x << 32) ^ (uint)z;
 
-    private static long CellAt(float x, float z) => Cell((int)MathF.Floor(x / MeshCell), (int)MathF.Floor(z / MeshCell));
+    private static long CellAt(float x, float z, float size) => Cell((int)MathF.Floor(x / size), (int)MathF.Floor(z / size));
+
+    // The render triangle under (x, z) on either grid whose height is nearest refY, within band and never above maxY.
+    private static bool TryNearest(MeshEntry e, float x, float z, float refY, float band, float maxY, out int tri, out float y)
+    {
+        tri = -1;
+        y = 0f;
+        for (var g = 0; g < 2; g++)
+        {
+            var size = g == 0 ? MeshCell : MeshMaxSpan;
+            if (!(g == 0 ? e.Cells : e.Wide).TryGetValue(CellAt(x, z, size), out var list))
+            {
+                continue;
+            }
+
+            foreach (var t in list)
+            {
+                if (Solver.TriangleHeight(e.Tris[t], e.Tris[t + 1], e.Tris[t + 2], x, z, out var h) && h <= maxY && MathF.Abs(h - refY) <= band)
+                {
+                    band = MathF.Abs(h - refY);
+                    tri = t;
+                    y = h;
+                }
+            }
+        }
+
+        return tri >= 0;
+    }
 
     // Worker thread. Dalamud's own GetFileAsync is GetFile on a pool thread, so the read is safe off the main thread.
     private Vector3[]? LoadModel(string path)
@@ -460,8 +576,8 @@ public sealed unsafe partial class Plugin
     }
 
     // Swaps the collision hit's triangle for the render triangle under the same spot that is nearest it in height,
-    // within the band and never above the ray's start; a collider-bearing surface beats a collider-less one however
-    // close. Everything downstream reads the triangle, so nothing else changes.
+    // within the band and never above the ray's start; a collider-bearing surface wins a tie. Everything downstream
+    // reads the triangle, so nothing else changes.
     private void RefineByMesh(Vector3 origin, ref RaycastHit hit)
     {
         Vector3 p = hit.Point;
@@ -471,22 +587,16 @@ public sealed unsafe partial class Plugin
         var loose = new Candidate();
         foreach (var e in this.entries.Values)
         {
-            if (!e.Built || p.X < e.MinX || p.X > e.MaxX || p.Z < e.MinZ || p.Z > e.MaxZ || !e.Cells.TryGetValue(CellAt(p.X, p.Z), out var cell))
+            if (e.Built && p.X >= e.MinX && p.X <= e.MaxX && p.Z >= e.MinZ && p.Z <= e.MaxZ && TryNearest(e, p.X, p.Z, p.Y, band, origin.Y, out var tri, out var y))
             {
-                continue;
-            }
-
-            ref var best = ref (e.Solid ? ref solid : ref loose);
-            foreach (var t in cell)
-            {
-                if (Solver.TriangleHeight(e.Tris[t], e.Tris[t + 1], e.Tris[t + 2], p.X, p.Z, out var y) && MathF.Abs(y - p.Y) <= band && y <= origin.Y)
-                {
-                    best.Offer(MathF.Abs(y - p.Y), e, t, y);
-                }
+                ref var best = ref (e.Solid ? ref solid : ref loose);
+                best.Offer(MathF.Abs(y - p.Y), e, tri, y);
             }
         }
 
-        var pick = solid.Entry != null ? solid : loose;
+        // Nearest to the hit wins, a collider-bearing surface on a tie. Letting one win merely for being within reach took
+        // the foot down to the terrain under a raised collider-less floor wherever the two came close.
+        var pick = loose.Dist < solid.Dist ? loose : solid;
         if (pick.Entry == null)
         {
             this.MeshMissed++;
@@ -496,6 +606,12 @@ public sealed unsafe partial class Plugin
         hit.V1 = pick.Entry.Tris[pick.Tri];
         hit.V2 = pick.Entry.Tris[pick.Tri + 1];
         hit.V3 = pick.Entry.Tris[pick.Tri + 2];
+        this.MeshLastPath = pick.Entry.Path;
+        this.MeshLastSolid = pick.Entry.Solid;
+        this.MeshLastUp = Vector3.Cross(hit.V2 - hit.V1, hit.V3 - hit.V1).Y > 0f;
+        this.MeshLastSpan = MathF.Max(
+            MathF.Max(hit.V1.X, MathF.Max(hit.V2.X, hit.V3.X)) - MathF.Min(hit.V1.X, MathF.Min(hit.V2.X, hit.V3.X)),
+            MathF.Max(hit.V1.Z, MathF.Max(hit.V2.Z, hit.V3.Z)) - MathF.Min(hit.V1.Z, MathF.Min(hit.V2.Z, hit.V3.Z)));
         hit.Point = new Vector3(p.X, pick.Y, p.Z);
         hit.Distance = origin.Y - pick.Y;
         this.MeshRefined++;

@@ -13,12 +13,12 @@ Product decisions that bound the design space (do not re-litigate):
 - **Distribution: self-hosted third-party repo**, csproj as the manifest. DalamudPluginsD17 review constraints are not binding.
 - **Never crash, at any cost in features.** Compatibility with CustomizePlus / SimpleHeels / Brio is a lower priority than not taking the client down.
 
-Milestone state (2026-09-12): M0–M4 and M5b done and in-game verified. M5 (stairs/ledges) partial — three probes per foot, median height; the slope sink is open and has a `SlopeLift` interim knob. M6 (sitting/emotes) is written and awaits in-game verification: `EmoteLoop` opens the gate, ground sit and sleep (`InPositionLoop`, `ModeParam` 1 and 3) tilt the whole pose to the ground plane. M7 (other characters + release) is not started. M8 (render-mesh raycasting, experimental) is a hybrid in `Plugin.Mesh.cs`, in-game verified 2026-09-12, off by default: collision gates, the render mesh refines the height within a band.
+Milestone state (2026-09-12): M0–M4 and M5b done and in-game verified. M5 (stairs/ledges) partial — three probes per foot, median height; the slope sink is open and has a `SlopeLift` interim knob. M6 (sitting/emotes) is written and awaits in-game verification: `EmoteLoop` opens the gate, ground sit and sleep (`InPositionLoop`, `ModeParam` 1 and 3) tilt the whole pose to the ground plane. M7 (other characters + release) is not started. M8 (render-mesh raycasting, experimental) is a hybrid in `Plugin.Mesh.cs`, in-game verified 2026-09-12, off by default: collision gates, the render mesh refines the height within a band. M10 (bumping into people, a torso flinch when the local player runs into a character) is in-game verified 2026-09-12, off by default; M10b carries sheathed weapons along with every torso turn, verified the same day, on by default.
 
 Load-bearing invariants:
 
 - **All work happens in the `RenderManager::Render` detour, before `Original`.** Edits made from `Framework.Update` do not survive to the rendered frame; this was demonstrated in game with a diagnostic toggle that has since been removed.
-- **Guards before every dereference.** An access violation is not catchable in .NET; `try/catch` only covers managed math bugs. `ResolvePose` owns the pointer, object-type and bounds checks, and nothing else dereferences game memory unchecked.
+- **Guards before every dereference.** An access violation is not catchable in .NET; `try/catch` only covers managed math bugs. `ResolvePose` owns the pointer, object-type and bounds checks for the pose. Two reads sit outside it and carry their own full chain: `FindBump` (non-null wrapper, non-zero address, object-kind filter, null draw object) and `AnchorWeapons` (draw-object type, attach type and owner, attachment count, bone index against `ModelPose.Length`). Nothing else dereferences game memory unchecked.
 - **`Original` is always called and never inside the `try`.** The fault breaker counts managed faults, trips inert after 5, and is re-armed only from the UI.
 - **`DrawOffset` writes are delta-only.** SimpleHeels and friends write the same field; we track `written` and only ever add or remove our own delta. **`Dispose` removes it**, so the character is never left sunk.
 - **Y through `SetDrawOffset`, X/Z through the movement hook.** The game only honours the Y component of the draw offset.
@@ -45,7 +45,7 @@ FootIk/Plugin.cs          # services, both hook signatures + install, detours, f
 FootIk/Plugin.Dispatch.cs # who gets ticked: local player, object-table sweep, eligibility, retirement
 FootIk/Plugin.Tick.cs     # the per-frame pass: a ref struct Frame threaded through named steps
 FootIk/Plugin.Gather.cs   # GatherFeet and its search: sampling, picking, holding, recentring
-FootIk/Plugin.Bones.cs    # ResolvePose (the guard chain), SolveLeg, ApplySpineLean, RotateBody
+FootIk/Plugin.Bones.cs    # ResolvePose (the guard chain), SolveLeg, ApplySpineLean, RotateBody, weapon anchors
 FootIk/Plugin.Probes.cs   # Raycast (explicit layer/material filter), TrySupport, GroundAt
 FootIk/Plugin.Mesh.cs     # experimental: render-mesh ground height (layout scan, Lumina model cache, XZ grid, RefineByMesh)
 FootIk/Solver.cs          # pure math: Xf, Compose/Relative, FromTo, TwoBone, Pick, SelfTest
@@ -60,9 +60,9 @@ docs/PLAN.md              # the source of truth for research, offsets and milest
 Per-frame pipeline in `Plugin.Tick.cs` (`TickOne`), reached once per character from `Plugin.Dispatch.cs`:
 
 ```
-gate (Mode / jump / conditions / GPose) → ResolvePose → ReadTransform
+gate (Mode / jump / conditions / GPose) → ResolvePose → ReadTransform → AnchorWeapons → FindBump
   → ProbeFoot → GatherFeet → PushFromWalls → ArrangeStance → MeasureFoot
-  → ApplyPelvis → PlaceFoot → LeanSpine → TiltBody
+  → ApplyPelvis → PlaceFoot → LeanSpine → ShoveTorso → TiltBody → CarryWeapons
 ```
 
 Dependency direction: `Dispatch` picks the characters and `TickOne` orchestrates each, and every game-memory read in it (character fields, skeleton transform, bone translations via `Bones.Pos`) sits behind `ResolvePose` or the local-player check; `Bones`/`Probes` own the pointer walks, pose writes and raycasts; `Solver` and `LegChain` are pure and hold no plugin state; `Overlay` reads `Snap` and `Settings` and owns nothing.
@@ -75,7 +75,7 @@ The csproj **is** the plugin manifest (Name, Punchline, Description, Tags…). *
 
 - **File-scoped namespace, single root namespace `FootIk`**, no folders.
 - **`this.` on every instance member access**, braces on every block including one-line `if`s. The codebase is uniform on this; keep it.
-- **The column alignment of the `[PluginService]` block in `Plugin.cs` is deliberate.** It is the only thing `dotnet format` disputes in the whole project (14 WHITESPACE errors, lines 27–34, all in that block). Do not let a blanket format pass collapse it, and do not "fix" those errors.
+- **The column alignment of the `[PluginService]` block in `Plugin.cs` is deliberate.** It is the only thing `dotnet format` disputes in the whole project (16 WHITESPACE errors, lines 30–38, all in that block). Do not let a blanket format pass collapse it, and do not "fix" those errors.
 - **Explicit usings**, ordered System → Dalamud → FFXIVClientStructs. No global usings.
 - **`sealed`** on concrete classes; `Plugin` is `sealed unsafe partial`.
 - **Plain mutable structs for per-frame data** (`Frame`, `Snapshot`, `FootSnapshot`, `Xf`, `LegChain`) — scratch state read by the overlay, not value objects. Don't convert them to records.

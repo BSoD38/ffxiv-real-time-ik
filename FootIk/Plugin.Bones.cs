@@ -1,6 +1,7 @@
 using System;
 using System.Numerics;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
+using FFXIVClientStructs.FFXIV.Client.Graphics;
 using FFXIVClientStructs.FFXIV.Client.Graphics.Render;
 using FFXIVClientStructs.FFXIV.Client.Graphics.Scene;
 using FFXIVClientStructs.Havok.Animation.Rig;
@@ -113,6 +114,91 @@ public sealed unsafe partial class Plugin
         return true;
     }
 
+    // A weapon or shield is its own draw object, fastened to a body bone before this hook ran, so a bone we turn leaves
+    // it behind (seen in game on a sheathed shield during a bump). Each one's anchor bone is read before the pose is
+    // touched, and the weapon carried afterwards by how that bone moved.
+    private struct WeaponAnchor
+    {
+        public CharacterBase* Weapon;
+        public int Bone;
+        public Xf Old;
+    }
+
+    // The three weapon slots of the character's draw data. Attach type 4 is fastened to a bone of `OwnerSkeleton`, the
+    // body; `TargetSkeleton` is the weapon's own skeleton (read in game: a first pass that matched the target found
+    // nothing with a shield drawn).
+    private static int AnchorWeapons(Character* chr, Skeleton* skel, hkaPose* pose, Span<WeaponAnchor> into)
+    {
+        var n = 0;
+        var bones = pose->ModelPose.Data;
+        var slots = chr->DrawData.WeaponData;
+        for (var i = 0; i < slots.Length && n < into.Length; i++)
+        {
+            var draw = slots[i].DrawData.DrawObject;
+            if (draw == null || draw->GetObjectType() != ObjectType.CharacterBase)
+            {
+                continue;
+            }
+
+            var weapon = (CharacterBase*)draw;
+            ref var attach = ref weapon->Attach;
+            if (attach.ExecuteType != 4 || attach.OwnerSkeleton != skel || attach.AttachmentCount <= 0 || attach.SkeletonBoneAttachments == null)
+            {
+                continue;
+            }
+
+            var mask = attach.SkeletonBoneAttachments[0].BoneIndexMask;
+            int bone = mask.BoneIdx;
+            if (mask.PartialSkeletonIdx != 0 || bone >= pose->ModelPose.Length)
+            {
+                continue;
+            }
+
+            into[n++] = new WeaponAnchor { Weapon = weapon, Bone = bone, Old = Bones.Read(in bones[bone]) };
+        }
+
+        return n;
+    }
+
+    // The draw object's transform always; the skeleton's too when the weapon has one, as its pose hangs from it.
+    private static void CarryWeapons(Skeleton* skel, hkaPose* pose, ReadOnlySpan<WeaponAnchor> weapons)
+    {
+        var body = AsXf(in skel->Transform);
+        var bones = pose->ModelPose.Data;
+        foreach (ref readonly var w in weapons)
+        {
+            var was = Solver.Compose(in body, in w.Old);
+            var now = Solver.Compose(in body, Bones.Read(in bones[w.Bone]));
+            var obj = Solver.Compose(in now, Solver.Relative(in was, new Xf { T = w.Weapon->Position, R = w.Weapon->Rotation, S = w.Weapon->Scale }));
+            if (!obj.IsFinite)
+            {
+                continue;
+            }
+
+            w.Weapon->Position = obj.T;
+            w.Weapon->Rotation = obj.R;
+            w.Weapon->Scale = obj.S;
+            var ws = w.Weapon->Skeleton;
+            if (ws == null)
+            {
+                continue;
+            }
+
+            ref var t = ref ws->Transform;
+            var moved = Solver.Compose(in now, Solver.Relative(in was, AsXf(in t)));
+            if (!moved.IsFinite)
+            {
+                continue;
+            }
+
+            t.Position = moved.T;
+            t.Rotation = moved.R;
+            t.Scale = moved.S;
+        }
+    }
+
+    private static Xf AsXf(in Transform t) => new() { T = t.Position, R = t.Rotation, S = t.Scale };
+
     // Turns the whole model-space pose about the character origin. Face and hair partials were attached to body bones
     // before this hook ran; a rigid turn about the origin moves an anchor and its partial the same way.
     private static void RotateBody(Skeleton* skel, hkaPose* pose, Quaternion q)
@@ -149,20 +235,18 @@ public sealed unsafe partial class Plugin
         }
     }
 
-    // lean is radians, forward positive: a third on each spine bone, the neck counter-rotated so the head stays level.
-    private static void ApplySpineLean(Skeleton* skel, hkaPose* pose, in LegChain chain, float lean)
+    // turn is spread a third on each spine bone; neck goes on the neck bone on top of it, so the head can be held level.
+    private static void ApplySpineLean(Skeleton* skel, hkaPose* pose, in LegChain chain, Quaternion turn, Quaternion neck)
     {
         var sub = chain.SpineSub;
         var ps = chain.SpineParentSlot;
-        var axis = Vector3.Cross(Vector3.UnitY, chain.BindForward);
         // The subtree is the whole upper body, sized by game data: an unbounded stackalloc risks a stack overflow,
         // which is not catchable, and an empty one indexes out of bounds below.
-        if (sub.Length is 0 or > 256 || axis.LengthSquared() < 1e-8f)
+        if (sub.Length is 0 or > 256)
         {
             return;
         }
 
-        axis = Vector3.Normalize(axis);
         var bones = pose->ModelPose.Data;
         Span<Xf> old = stackalloc Xf[sub.Length];
         Span<Xf> nw = stackalloc Xf[sub.Length];
@@ -171,8 +255,7 @@ public sealed unsafe partial class Plugin
             old[i] = Bones.Read(in bones[sub[i]]);
         }
 
-        var third = Quaternion.CreateFromAxisAngle(axis, lean / 3f);
-        var counter = Quaternion.CreateFromAxisAngle(axis, -lean);
+        var third = Quaternion.Slerp(Quaternion.Identity, turn, 1f / 3f);
         nw[0] = old[0];
         nw[0].R = Quaternion.Normalize(third * old[0].R);
         for (var i = 1; i < sub.Length; i++)
@@ -184,7 +267,7 @@ public sealed unsafe partial class Plugin
             }
             else if (i == chain.NeckSlot)
             {
-                nw[i].R = Quaternion.Normalize(counter * nw[i].R);
+                nw[i].R = Quaternion.Normalize(neck * nw[i].R);
             }
         }
 

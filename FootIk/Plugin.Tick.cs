@@ -1,5 +1,6 @@
 using System;
 using System.Numerics;
+using Dalamud.Game.ClientState.Objects.Enums;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
 using FFXIVClientStructs.FFXIV.Client.Graphics.Render;
 using FFXIVClientStructs.FFXIV.Common.Component.BGCollision;
@@ -29,6 +30,7 @@ public sealed unsafe partial class Plugin
         public hkaPose* Pose;
         public Skeleton* Skel;
         public CharState St;
+        public Span<WeaponAnchor> Weapons;
     }
 
     // What the planted feet ask of the body height, and the range their legs can still work in.
@@ -42,11 +44,15 @@ public sealed unsafe partial class Plugin
     }
 
     private const float StillSpeed = 0.15f; // m/s, not a *Frac: every race moves at the same world speed.
+    private const float RunSpeed = 6f;      // m/s, a flat-out run on foot
 
     // Hip height over leg length: below FloorHips the character is on the floor rather than on its feet, and above
     // StandingHips it is clearly back on them. The Status tab reads it out; an idle pose measured over 0.85 in game.
     private const float FloorHips = 0.4f;
     private const float StandingHips = 0.85f;
+
+    // How much of a sideways shove leans the torso over; the rest of it turns the torso instead.
+    private const float BumpSideLean = 0.35f;
 
     // retire closes the gate whatever the character is doing, so the blend carries our offsets back off it.
     private void TickOne(Character* chr, CharState st, float dt, double rawDt, bool local, bool retire, ref Snapshot snap)
@@ -55,6 +61,7 @@ public sealed unsafe partial class Plugin
         var mode = chr->Mode;
         snap.Mode = mode;
         snap.ModeParam = chr->ModeParam;
+        snap.Height = chr->Height * chr->Scale;
         snap.IsJumping = chr->IsJumping();
         snap.GPose = ClientState.IsGPosing;
         snap.Conditions = Condition.Any(this.globalFlags) || (local && Condition.Any(this.gateFlags));
@@ -78,7 +85,8 @@ public sealed unsafe partial class Plugin
         // A zero in the skeleton scale turns every model-space conversion into infinity, and SmoothDrop keeps a NaN forever.
         var poseOk = ResolvePose(chr, ref st.Chain, ref snap, out var pose, out var skel)
             && skel->Transform.Scale.X > 1e-4f && skel->Transform.Scale.Y > 1e-4f && skel->Transform.Scale.Z > 1e-4f;
-        var f = new Frame { St = st, Dt = dt, Pose = pose, Skel = skel };
+        Span<WeaponAnchor> anchors = stackalloc WeaponAnchor[4];
+        scoped var f = new Frame { St = st, Dt = dt, Pose = pose, Skel = skel };
         f.LegLen = poseOk ? st.Chain.LegLength : 0f;
         f.MaxDrop = c.MaxDropFrac * f.LegLen;
         f.MaxRaise = c.MaxRaiseFrac * f.LegLen;
@@ -97,6 +105,7 @@ public sealed unsafe partial class Plugin
         var moved = logicalNow - st.LastLogical;
         f.Speed = !st.Fresh && rawDt > 1e-4 ? moved.Length() / (float)rawDt : 0f;
         f.VelDir = f.Speed > 0.05f ? Vector3.Normalize(moved) : Vector3.Zero;
+        st.Speed = f.Speed;
         st.LastLogical = logicalNow;
         st.Fresh = false;
         f.Still = f.Speed < StillSpeed;
@@ -108,6 +117,7 @@ public sealed unsafe partial class Plugin
         if (poseOk)
         {
             this.ReadTransform(chr, ref f);
+            f.Weapons = c.MoveWeapons && active ? anchors[..AnchorWeapons(chr, skel, pose, anchors)] : Span<WeaponAnchor>.Empty;
             // Written here rather than under the gate: the overlay draws the ruler from these, and a snapshot is blank
             // every tick, so leaving them to the gated path puts the ruler at the world origin whenever it is shut.
             snap.Yaw = f.Yaw;
@@ -115,6 +125,11 @@ public sealed unsafe partial class Plugin
             var hips = (Bones.Pos(in f.Bones[st.Chain.Left.Hip]).Y + Bones.Pos(in f.Bones[st.Chain.Right.Hip]).Y) * 0.5f;
             st.HipFrac = hips / f.LegLen;
             snap.HipFrac = st.HipFrac;
+        }
+
+        if (local && active && c.Bump)
+        {
+            this.FindBump(chr, ref f);
         }
 
         if (active)
@@ -184,7 +199,14 @@ public sealed unsafe partial class Plugin
         }
 
         this.LeanSpine(ref f, ref snap, active);
+        this.ShoveTorso(ref f, ref snap, active);
         this.TiltBody(ref f, ref snap, poseOk);
+        if (f.Weapons.Length > 0)
+        {
+            CarryWeapons(f.Skel, f.Pose, f.Weapons);
+        }
+
+        snap.Weapons = f.Weapons.Length;
     }
 
     private static ref FootSnapshot Foot(ref Snapshot snap, int s) => ref (s == 0 ? ref snap.Left : ref snap.Right);
@@ -638,7 +660,7 @@ public sealed unsafe partial class Plugin
             {
                 var uphill = -(n.X * f.VelDir.X + n.Z * f.VelDir.Z) / n.Y; // slope tangent along travel, positive uphill
                 var slopeAngle = MathF.Atan(uphill);
-                var lean = slopeAngle * (slopeAngle >= 0 ? c.LeanUphillGain : c.LeanDownhillGain) * Math.Clamp(f.Speed / 6f, 0f, 1f);
+                var lean = slopeAngle * (slopeAngle >= 0 ? c.LeanUphillGain : c.LeanDownhillGain) * Math.Clamp(f.Speed / RunSpeed, 0f, 1f);
                 var cap = MathF.Abs(c.MaxLeanDeg) * MathF.PI / 180f;
                 leanTarget = Math.Clamp(lean, -cap, cap);
             }
@@ -670,7 +692,178 @@ public sealed unsafe partial class Plugin
 
         if (MathF.Abs(leanApplied) > 0.002f)
         {
-            ApplySpineLean(f.Skel, f.Pose, in f.St.Chain, leanApplied);
+            var axis = Vector3.Cross(Vector3.UnitY, f.St.Chain.BindForward);
+            ApplySpineLean(f.Skel, f.Pose, in f.St.Chain, Quaternion.CreateFromAxisAngle(axis, leanApplied), Quaternion.CreateFromAxisAngle(axis, -leanApplied));
+        }
+    }
+
+    // Characters have no collision with each other, so this is our own: centres a bump radius apart on the same
+    // floor, closing faster than a nudge. Ours takes the push; theirs takes the opposite when it is being ticked, so
+    // both bodies react. Two cooldowns: one between any two bumps, a longer one before the same character counts again.
+    private void FindBump(Character* chr, ref Frame f)
+    {
+        var c = this.Settings;
+        var st = f.St;
+        if (st.BumpAge < c.BumpCooldown || f.Speed < c.BumpMinSpeed)
+        {
+            return;
+        }
+
+        var radius = c.BumpRadiusFrac * f.LegLen * f.Scale.Y;
+        var myTop = chr->Height * chr->Scale;
+        var vel = f.VelDir * f.Speed;
+        // Indexed rather than enumerated: IObjectTable.GetEnumerator returns the interface, which allocates per frame.
+        for (var i = 0; i < Objects.Length; i++)
+        {
+            var o = Objects[i];
+            if (o == null || o.Address == 0 || o.GameObjectId == st.Id || o.ObjectKind is not (ObjectKind.Pc or ObjectKind.BattleNpc or ObjectKind.EventNpc))
+            {
+                continue;
+            }
+
+            if (o.GameObjectId == st.BumpTarget && st.BumpAge < c.BumpSameCooldown)
+            {
+                continue;
+            }
+
+            var to = o.Position - st.LastLogical;
+            if (MathF.Abs(to.Y) > f.LegLen * f.Scale.Y)
+            {
+                continue;
+            }
+
+            // A quest NPC can stand in the object table with nothing drawn, or with its model switched off (run into
+            // in game). The draw object's own visibility bit is not consulted: it may only mean out of frame.
+            var other = (Character*)o.Address;
+            if (other->DrawObject == null || (other->RenderFlags & FFXIVClientStructs.FFXIV.Client.Game.Object.VisibilityFlags.Model) != 0)
+            {
+                continue;
+            }
+
+            // Their size against ours, 1 when either reads nothing: a body's radius grows with its height.
+            var theirTop = other->Height * other->Scale;
+            var ratio = myTop > 1e-3f && theirTop > 1e-3f ? theirTop / myTop : 1f;
+            var reach = radius * (1f + ratio);
+            to.Y = 0f;
+            var d2 = to.LengthSquared();
+            if (d2 > reach * reach || d2 < 1e-6f)
+            {
+                continue;
+            }
+
+            var dir = to / MathF.Sqrt(d2);
+            if (Vector3.Dot(vel, dir) < c.BumpMinSpeed)
+            {
+                continue;
+            }
+
+            if (!this.states.TryGetValue(o.Address, out var known) || known.Id != o.GameObjectId)
+            {
+                known = null;
+            }
+
+            // Sitting or lying, nothing stands at shoulder height to run into. Mode covers the seated emotes; the hips
+            // cover a floor emote once the character is being ticked.
+            if (other->Mode == CharacterModes.InPositionLoop || (known != null && known.HipFrac < FloorHips))
+            {
+                continue;
+            }
+
+            // A body under two fifths of the other's height hits it below the hips and leaves its torso alone; from
+            // seven tenths up it hits in full. So a Lalafell shoves a Roegadyn's knees and takes the whole shove
+            // itself, while everyone else moves a Hrothgar fully: with the line at half height the tallest races
+            // barely flinched against anyone (seen in game).
+            // A bump landing while the last still plays rises from where that one stands, so the angle never drops
+            // to zero and pops back up. The direction does snap, as a second hit from another side would.
+            var rise = MathF.Max(c.BumpRiseSeconds, 1e-3f);
+            st.BumpTarget = o.GameObjectId;
+            st.BumpAge = Envelope(st.BumpAge, rise, c.BumpTau) * rise;
+            st.BumpPush = -dir * Reaches(ratio);
+            st.BumpBody = Math.Clamp(f.Speed / RunSpeed, 0f, 1f);
+            if (known != null)
+            {
+                known.BumpAge = Envelope(known.BumpAge, rise, c.BumpTau) * rise;
+                known.BumpPush = dir * Reaches(1f / ratio);
+                known.BumpBody = Math.Clamp(known.Speed / RunSpeed, 0f, 1f);
+            }
+
+            return;
+        }
+
+        static float Reaches(float ratio) => Math.Clamp((ratio - 0.4f) / 0.3f, 0f, 1f);
+    }
+
+    // A straight rise, then a release that lingers at the peak before it falls: a Gaussian, where a plain exponential
+    // is half gone by the first frame after the peak and read as weak in game.
+    private static float Envelope(float age, float rise, float tau)
+    {
+        rise = MathF.Max(rise, 1e-3f);
+        var fall = (age - rise) / MathF.Max(tau, 1e-3f);
+        return age < rise ? age / rise : MathF.Exp(-fall * fall);
+    }
+
+    // A shove from the front or behind pitches the torso; one from the side mostly turns it, the shoulder that was hit
+    // swinging back so the chest faces the other body, with a little sideways lean. The lean was the whole sideways
+    // reaction at first and read as swaying on bumped bystanders, who are always hit side-on by someone running past.
+    // The twist is full from a fifth of a turn off centre and fades to nothing head-on. The head goes with the
+    // shoulders: the slope lean holds it level, a shove does not.
+    private void ShoveTorso(ref Frame f, ref Snapshot snap, bool active)
+    {
+        var c = this.Settings;
+        var st = f.St;
+        st.BumpAge += f.Dt;
+        var envelope = Envelope(st.BumpAge, c.BumpRiseSeconds, c.BumpTau);
+        var angle = c.Bump && active ? c.BumpMaxDeg * MathF.PI / 180f * envelope * st.Blend * st.BumpPush.Length() : 0f;
+        snap.BumpDeg = angle * 180f / MathF.PI;
+        if (angle < 0.002f || st.Chain.SpineSub.Length == 0)
+        {
+            return;
+        }
+
+        var push = Vector3.Transform(st.BumpPush, Quaternion.Inverse(f.Rot));
+        var len = push.Length();
+        if (len < 1e-4f)
+        {
+            return;
+        }
+
+        var fwd = st.Chain.BindForward;
+        var side = Vector3.Cross(Vector3.UnitY, fwd);
+        var fore = Vector3.Dot(push, fwd) / len;
+        var across = Vector3.Dot(push, side) / len;
+        var pitch = Quaternion.CreateFromAxisAngle(side, angle * fore);
+        var lean = Quaternion.CreateFromAxisAngle(fwd, -angle * across * BumpSideLean);
+        var twistAngle = Math.Clamp(-3f * across, -1f, 1f) * angle;
+        var twist = Quaternion.CreateFromAxisAngle(Vector3.UnitY, twistAngle);
+        // The twist goes innermost so the tip lands exactly along the push rather than swung round by the yaw.
+        ApplySpineLean(f.Skel, f.Pose, in st.Chain, lean * pitch * twist, Quaternion.Identity);
+
+        // At speed the whole body is knocked round as well, hips and all, while a standing body keeps the hit in its
+        // shoulders. After the torso, so the torso axes are the animation's own; the rigid turn then carries torso,
+        // head and partials together. The legs keep the stride: each ankle goes back where the animation had it, its
+        // orientation turned back and the knee bending the way it did, so the hips go with the pelvis and the legs
+        // re-bend to reach. Letting the feet swing round with the body read as the body sliding (seen in game).
+        var bodyYaw = twistAngle * st.BumpBody * c.BumpBodyTurn;
+        if (MathF.Abs(bodyYaw) < 0.002f)
+        {
+            return;
+        }
+
+        var q = Quaternion.CreateFromAxisAngle(Vector3.UnitY, bodyYaw);
+        Span<Vector3> ankle = stackalloc Vector3[2];
+        Span<Vector3> bend = stackalloc Vector3[2];
+        for (var s = 0; s < 2; s++)
+        {
+            var leg = st.Chain.Side(s);
+            ankle[s] = Bones.Pos(in f.Bones[leg.Ankle]);
+            bend[s] = Bones.Pos(in f.Bones[leg.Knee]) - Bones.Pos(in f.Bones[leg.Hip]);
+        }
+
+        RotateBody(f.Skel, f.Pose, q);
+        var back = Quaternion.Inverse(q);
+        for (var s = 0; s < 2; s++)
+        {
+            SolveLeg(f.Pose, st.Chain.Side(s), ankle[s], back, bend[s], 1f);
         }
     }
 }

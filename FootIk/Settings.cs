@@ -52,6 +52,7 @@ public sealed class Settings : IPluginConfiguration
     public float GatherForward = 0.7f;
     public float MaxPelvisRaiseFrac = 0.3f;
 
+    public bool MoveWeapons = true; // carried weapons follow the bones we turn, instead of staying where the animation left them
     public bool SlopeLean;
     public float LeanUphillGain = 0.5f;
     public float LeanDownhillGain = 1.0f; // hunched races (Hrothgar) want a weak uphill lean but a strong downhill one
@@ -59,6 +60,16 @@ public sealed class Settings : IPluginConfiguration
     public float MaxTotalPitchDeg = 60f; // the Hrothgar run animation is already pitched ~40 forward
     public float MinTotalPitchDeg = -5f; // the spine may lean back a little past upright, never further
     public float LeanTau = 0.3f;
+
+    public bool Bump;
+    public float BumpRadiusFrac = 0.35f; // half the centre distance at which two bodies touch, in leg lengths
+    public float BumpMinSpeed = 1f;      // m/s closing on them, a world speed like StillSpeed
+    public float BumpMaxDeg = 20f;
+    public float BumpRiseSeconds = 0.08f;
+    public float BumpTau = 0.5f;
+    public float BumpBodyTurn = 0.6f;     // share of the turn the whole body takes at running speed, feet included
+    public float BumpCooldown = 0.5f;     // s between any two bumps
+    public float BumpSameCooldown = 2f;   // s before the same character counts again
 
     public bool Emotes = true;
     public float MaxSitTiltDeg = 20f;
