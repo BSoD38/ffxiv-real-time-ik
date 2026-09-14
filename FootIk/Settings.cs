@@ -1,3 +1,4 @@
+using System;
 using System.Reflection;
 using Dalamud.Configuration;
 
@@ -65,13 +66,13 @@ public sealed class Settings : IPluginConfiguration
     public bool Shoved = true;           // someone running into you counts, not only you running into them
     public bool Grunt;                   // both bodies play their own damage-taken voice line on a bump
     public float BumpRadiusFrac = 0.45f; // half the centre distance at which two bodies touch, in leg lengths
-    public float BumpMinSpeed = 1f;      // m/s closing on them, a world speed like StillSpeed
+    public float BumpMinSpeed = 5f;      // m/s closing on them, a world speed like StillSpeed
     public float BumpMaxDeg = 25f;
     public float BumpRiseSeconds = 0.08f;
     public float BumpTau = 0.5f;
     public float BumpBodyTurn = 1f;       // share of the turn the whole body takes at running speed, feet included
-    public float BumpShoveFrac = 0.2f;    // how far the hips are carried off the planted feet, in leg lengths
-    public float BumpHeadHold = 1f;       // how much of the spine turn and body yaw the neck undoes, so the head holds still
+    public float BumpShoveFrac = 0.1f;    // how far the hips are carried off the planted feet, in leg lengths
+    public float BumpHeadHold = 0.4f;     // how much of the spine turn and body yaw the neck undoes, so the head holds still
     public float BumpCooldown = 0.6f;     // s between any two bumps
     public float BumpSameCooldown = 0.9f; // s before the same character counts again
 
@@ -88,6 +89,19 @@ public sealed class Settings : IPluginConfiguration
     public bool MeshRefine; // experimental: the ground height read off the visible level geometry, gated by collision
     public float MeshRadius = 30f; // yalms around the local player that are read, a world distance like OthersRadius
     public float MeshBand = 0.35f; // metres the visible ground may differ from collision and still be believed: about a tall stair tread, a property of the level rather than the character
+
+    // Puts fields back to how they shipped; null resets every one of them.
+    public void Reset(string[]? fields = null)
+    {
+        var defaults = new Settings();
+        foreach (var field in typeof(Settings).GetFields(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (fields is null || Array.IndexOf(fields, field.Name) >= 0)
+            {
+                field.SetValue(this, field.GetValue(defaults));
+            }
+        }
+    }
 
     // A truncated or hand-edited file can deserialise a NaN, and every comparison against NaN is false, so the guards
     // downstream let it through as "not too far". Reflection so a field added later is covered.

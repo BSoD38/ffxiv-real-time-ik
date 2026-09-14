@@ -10,12 +10,47 @@ internal sealed class Overlay : Window
     // Labels are short names: an ImGui label sits to the right of its widget, so a long one widens the whole window.
     // Units and computed metres go in the slider's format string, explanations in tooltips.
     private const float MinSliderWidth = 80f;
+    private const string ConfirmTitle = "Reset settings";
 
+    // What each tab's reset button puts back; the Status tab has no entry and resets everything instead.
+    // nameof so renaming a setting breaks the build rather than leaving a button that quietly does nothing.
+    private static readonly string[][] TabFields =
+    [
+        [
+            nameof(Settings.Enabled), nameof(Settings.KeepFeetOutOfWalls), nameof(Settings.MaxRaiseFrac), nameof(Settings.MaxKneeBendDeg),
+            nameof(Settings.StraightenLimit), nameof(Settings.MaxAnkleAngleDeg), nameof(Settings.TiltFadeFrac), nameof(Settings.MaxDropFrac),
+            nameof(Settings.MaxPelvisRaiseFrac), nameof(Settings.MaxStepDownFrac), nameof(Settings.BlendSeconds), nameof(Settings.PelvisTau),
+            nameof(Settings.WallClearanceFrac), nameof(Settings.MaxStepFrac), nameof(Settings.LiftThresholdFrac), nameof(Settings.RayUpFrac),
+            nameof(Settings.RayDownFrac), nameof(Settings.RestAdjustFrac), nameof(Settings.SlopeLiftFrac),
+        ],
+        [
+            nameof(Settings.GatherFeet), nameof(Settings.GatherToPosition), nameof(Settings.MinStanceFrac), nameof(Settings.GatherStraighten),
+            nameof(Settings.GatherForward), nameof(Settings.GatherPrecision), nameof(Settings.GatherTauIn), nameof(Settings.GatherTauOut),
+        ],
+        [
+            nameof(Settings.SlopeLean), nameof(Settings.LeanUphillGain), nameof(Settings.LeanDownhillGain), nameof(Settings.MaxLeanDeg),
+            nameof(Settings.MoveWeapons), nameof(Settings.MaxTotalPitchDeg), nameof(Settings.MinTotalPitchDeg), nameof(Settings.LeanTau),
+        ],
+        [
+            nameof(Settings.Bump), nameof(Settings.Shoved), nameof(Settings.Grunt), nameof(Settings.BumpCooldown),
+            nameof(Settings.BumpSameCooldown), nameof(Settings.BumpRadiusFrac), nameof(Settings.BumpMaxDeg), nameof(Settings.BumpShoveFrac),
+            nameof(Settings.BumpHeadHold), nameof(Settings.BumpBodyTurn), nameof(Settings.BumpMinSpeed), nameof(Settings.BumpRiseSeconds),
+            nameof(Settings.BumpTau),
+        ],
+        [
+            nameof(Settings.Emotes), nameof(Settings.FloorTilt), nameof(Settings.MaxSitTiltDeg), nameof(Settings.SitTiltTau),
+        ],
+        [
+            nameof(Settings.Others), nameof(Settings.MaxOthers), nameof(Settings.OthersRadius), nameof(Settings.Who),
+            nameof(Settings.OthersGatherPrecision), nameof(Settings.MeshRefine), nameof(Settings.MeshRadius), nameof(Settings.MeshBand),
+        ],
+    ];
     private readonly Plugin plugin;
+    private readonly (string Name, Action Draw)[] tabs;
 
     // Sliders fill the row minus room for the labels. The reserve is the widest label drawn in this tab last frame,
     // which keeps them aligned without every call site repeating its label.
-    private readonly float[] labelReserve = new float[7];
+    private readonly float[] labelReserve;
     private int tab;
     private float rawPeak;
     private float lostPeak;
@@ -24,40 +59,108 @@ internal sealed class Overlay : Window
     public Overlay(Plugin plugin) : base("Inverse Kinematics")
     {
         this.plugin = plugin;
+        this.tabs =
+        [
+            ("Feet", this.DrawFeet),
+            ("Edges", this.DrawEdges),
+            ("Lean", this.DrawLean),
+            ("Shoving", this.DrawShoving),
+            ("Emotes", this.DrawEmotes),
+            ("Performance", this.DrawPerformance),
+            ("Status", this.DrawStatus),
+        ];
+        this.labelReserve = new float[this.tabs.Length];
         this.Size = new Vector2(440, 520);
         this.SizeCondition = ImGuiCond.FirstUseEver;
     }
 
     public override void Draw()
     {
-        if (!ImGui.BeginTabBar("tabs"))
-        {
-            return;
-        }
-
-        this.Tab(0, "Feet", this.DrawFeet);
-        this.Tab(1, "Edges", this.DrawEdges);
-        this.Tab(2, "Lean", this.DrawLean);
-        this.Tab(3, "Shoving", this.DrawShoving);
-        this.Tab(4, "Emotes", this.DrawEmotes);
-        this.Tab(5, "Performance", this.DrawPerformance);
-        this.Tab(6, "Status", this.DrawStatus);
-        ImGui.EndTabBar();
+        this.TabRow();
+        this.Body();
+        this.DrawConfirm();
     }
 
-    private void Tab(int index, string name, Action body)
+    // The bar is boxed into a child so the reset button can sit beside it on the same row and the tabs never run
+    // under it, and so the tab bar and the button both stay put while the body below them scrolls.
+    private void TabRow()
     {
-        if (!ImGui.BeginTabItem(name))
+        var label = this.tab >= TabFields.Length ? "Reset everything" : "Reset this tab";
+        var style = ImGui.GetStyle();
+        var button = ImGui.CalcTextSize(label).X + (style.FramePadding.X * 2f);
+        var bar = MathF.Max(MinSliderWidth, ImGui.GetContentRegionAvail().X - button - style.ItemSpacing.X);
+
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
+        if (ImGui.BeginChild("bar", new Vector2(bar, ImGui.GetFrameHeight() + 2f), false))
+        {
+            if (ImGui.BeginTabBar("tabs"))
+            {
+                for (var i = 0; i < this.tabs.Length; i++)
+                {
+                    if (ImGui.BeginTabItem(this.tabs[i].Name))
+                    {
+                        this.tab = i;
+                        ImGui.EndTabItem();
+                    }
+                }
+
+                ImGui.EndTabBar();
+            }
+        }
+
+        ImGui.EndChild();
+        ImGui.PopStyleVar();
+
+        ImGui.SameLine();
+        if (ImGui.Button(label))
+        {
+            ImGui.OpenPopup(ConfirmTitle);
+        }
+    }
+
+    // Drawn outside the tab bar, so the bar can be narrower than the settings under it. Each tab keeps its own
+    // scroll position because the id is seeded with its index.
+    private void Body()
+    {
+        this.labelMax = 0f;
+        ImGui.PushID(this.tab);
+        if (ImGui.BeginChild("body", Vector2.Zero, false))
+        {
+            ImGui.Spacing();
+            this.tabs[this.tab].Draw();
+        }
+
+        ImGui.EndChild();
+        ImGui.PopID();
+        this.labelReserve[this.tab] = this.labelMax;
+    }
+
+    private void DrawConfirm()
+    {
+        if (!ImGui.BeginPopupModal(ConfirmTitle, ImGuiWindowFlags.AlwaysAutoResize))
         {
             return;
         }
 
-        this.tab = index;
-        this.labelMax = 0f;
+        var global = this.tab >= TabFields.Length;
+        ImGui.TextUnformatted(global
+            ? "Put every setting, on every tab, back to how it shipped?"
+            : "Put the settings on this tab back to how they shipped? The other tabs are left alone.");
         ImGui.Spacing();
-        body();
-        this.labelReserve[index] = this.labelMax;
-        ImGui.EndTabItem();
+        if (ImGui.Button(global ? "Reset everything" : "Reset this tab"))
+        {
+            this.plugin.Settings.Reset(global ? null : TabFields[this.tab]);
+            this.plugin.SaveSettings();
+            ImGui.CloseCurrentPopup();
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("Cancel"))
+        {
+            ImGui.CloseCurrentPopup();
+        }
+
+        ImGui.EndPopup();
     }
 
     private static bool Advanced() => ImGui.CollapsingHeader("Advanced");
@@ -212,6 +315,8 @@ internal sealed class Overlay : Window
         ImGui.BeginDisabled(!c.GatherFeet);
         this.Check("Platforming mode", ref c.GatherToPosition);
         Help("Enabling this prioritises feet positions that avoid sliding your character off-centre. This helps better seeing where your character really is, at the cost of worse poses.");
+        this.SliderInt("Precision", ref c.GatherPrecision, 1, 4, $"%d  ({4 * c.GatherPrecision} directions)",
+            "How carefully the plugin looks around each foot for ground to stand on. Higher finds narrow rails and beams more reliably and keeps the feet steadier, but costs more each frame. Lower it if the game slows down near edges.");
         ImGui.EndDisabled();
 
         if (Advanced())
@@ -224,8 +329,6 @@ internal sealed class Overlay : Window
                 "How much the legs straighten when the feet are gathered. Avoids legs being flexed while gathered on some races.");
             this.Slider("Feet forward", ref c.GatherForward, 0f, 1f, "%.2f",
                 "How strongly the knees and feet turn to face forward when gathered. Avoids duck feet on some races.");
-            this.SliderInt("Precision", ref c.GatherPrecision, 1, 4, $"%d  ({4 * c.GatherPrecision} directions)",
-                "How carefully the plugin looks around each foot for ground to stand on. Higher finds narrow rails and beams more reliably and keeps the feet steadier, but costs more each frame. Lower it if the game slows down near edges.");
             this.Slider("Ease in", ref c.GatherTauIn, 0.05f, 1f, "%.2f s",
                 "How quickly the feet move in onto a support.");
             this.Slider("Ease out", ref c.GatherTauOut, 0.05f, 1f, "%.2f s",
@@ -308,7 +411,7 @@ internal sealed class Overlay : Window
                 "How much the neck holds the head still while the body is shoved out from under it. Full keeps the character looking where it was looking; zero lets the head ride round with the shoulders.");
             this.Slider("Whole-body turn", ref c.BumpBodyTurn, 0f, 1.5f, "%.2f",
                 "How much of the turn the whole body takes at running speed, hips and all, on top of the shoulders; the legs keep following the stride. Zero keeps every bump in the upper body; standing characters always do.");
-            this.Slider("Bump speed", ref c.BumpMinSpeed, 0.2f, 6f, "%.1f m/s",
+            this.Slider("Bump speed", ref c.BumpMinSpeed, 0.2f, 10f, "%.1f m/s",
                 "How fast you must be moving towards someone for it to count as a bump. Set it above walking speed and only running bumps.");
             this.Slider("Bump rise", ref c.BumpRiseSeconds, 0.02f, 0.3f, "%.2f s",
                 "How quickly the body reaches its full flinch after the impact.");
@@ -408,6 +511,7 @@ internal sealed class Overlay : Window
 
         Section("Your character");
         ImGui.TextUnformatted(Activity(in s, c.Enabled));
+        ImGui.TextUnformatted($"Moving at {s.Speed:F1} m/s");
         ImGui.TextUnformatted($"Body height {Cm(s.Applied)}   lean {s.LeanDeg:F0} deg   bump {s.BumpDeg:F0} deg   tilt to the ground {s.SitTiltDeg:F0} deg");
 
         Section("Feet");
