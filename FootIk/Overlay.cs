@@ -209,12 +209,14 @@ internal sealed class Overlay : Window
         this.Check("Gather feet", ref c.GatherFeet);
         Help("Move your character's feet together when standing on narrow platforms to avoid them floating over an edge.");
         ImGui.Spacing();
+        ImGui.BeginDisabled(!c.GatherFeet);
+        this.Check("Platforming mode", ref c.GatherToPosition);
+        Help("Enabling this prioritises feet positions that avoid sliding your character off-centre. This helps better seeing where your character really is, at the cost of worse poses.");
+        ImGui.EndDisabled();
 
         if (Advanced())
         {
             ImGui.BeginDisabled(!c.GatherFeet);
-            this.Check("Platforming mode", ref c.GatherToPosition);
-            Help("Enabling this prioritises feet positions that avoid sliding your character off-centre. This helps better seeing where your character really is, at the cost of worse poses.");
             ImGui.Spacing();
             this.Slider("Min stance", ref c.MinStanceFrac, 0.02f, 0.4f, $"%.2f  ({c.MinStanceFrac * L:F2} m)",
                 "How close the feet can be of each other when gathering. Avoids the feet crossing or overlapping each other.");
@@ -353,6 +355,7 @@ internal sealed class Overlay : Window
         this.SliderInt("Gather feet precision", ref c.OthersGatherPrecision, 0, 4,
             c.OthersGatherPrecision == 0 ? "off" : $"%d  ({4 * c.OthersGatherPrecision} directions)",
             "Whether other characters also get their feet gathered onto narrow ledges and rails, and how carefully. Needs Gather feet on the Edges tab.");
+        ImGui.EndDisabled();
         ImGui.EndDisabled();
 
         ImGui.Spacing();
