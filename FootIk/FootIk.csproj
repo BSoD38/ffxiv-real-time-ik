@@ -4,14 +4,14 @@
   <!-- DalamudPackager takes json > yaml > csproj, first hit wins with no merge: a FootIk.json beside this file
        would silently replace every property below. -->
   <PropertyGroup>
-    <Version>0.3.2.0</Version>
+    <Version>0.3.3.0</Version>
     <Author>BSoD38</Author>
     <Name>Inverse Kinematics</Name>
-    <Punchline>Plants your character's feet on the ground in real time.</Punchline>
-    <Description>Real-time inverse kinematics for your character. Bends the legs against the game's collision so the feet rest on slopes and steps instead of clipping through or floating, adjusts the body height to match, and leans into slopes while running.</Description>
+    <Punchline>Correctly places your character's feet on the ground in real time.</Punchline>
+    <Description>Real-time inverse kinematics for your character. Bends the legs against the game's world so the feet rest on slopes and steps instead of clipping through or floating, lean into slopes while running, and many other features.</Description>
     <Tags>animation;ik;visual</Tags>
     <RepoUrl>https://github.com/BSoD38/ffxiv-real-time-ik</RepoUrl>
-    <AcceptsFeedback>false</AcceptsFeedback>
+    <AcceptsFeedback>true</AcceptsFeedback>
   </PropertyGroup>
 
 </Project>
