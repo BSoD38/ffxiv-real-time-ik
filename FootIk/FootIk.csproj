@@ -14,4 +14,18 @@
     <AcceptsFeedback>true</AcceptsFeedback>
   </PropertyGroup>
 
+  <!-- Dalamud reads an installed plugin's icon from images\icon.png beside the DLL. This copy covers a dev-loaded
+       build, which runs straight out of the output folder. -->
+  <ItemGroup>
+    <Content Include="images\icon.png" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- DalamudPackager deliberately keeps images\ out of the zip, staging it beside the manifest for the repository
+       listing instead, so an installed plugin had no icon at all. Appended to the finished zip rather than by
+       overriding the packager's own target: that override has to restate every manifest property, and one the SDK
+       adds later would silently go missing - the same trap as a hand-written FootIk.json. -->
+  <Target Name="BundleIcon" AfterTargets="DefaultDalamudPackagerRelease" Condition="'$(Configuration)' == 'Release'">
+    <Exec Command="powershell -NoProfile -NonInteractive -Command &quot;Add-Type -AssemblyName System.IO.Compression.FileSystem; $zip = [IO.Compression.ZipFile]::Open('$(OutputPath)$(AssemblyName)\latest.zip', 'Update'); $old = $zip.GetEntry('images/icon.png'); if ($old) { $old.Delete() }; [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, '$(ProjectDir)images\icon.png', 'images/icon.png'); $zip.Dispose()&quot;" />
+  </Target>
+
 </Project>

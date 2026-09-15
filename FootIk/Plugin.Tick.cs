@@ -69,6 +69,25 @@ public sealed unsafe partial class Plugin
     // How much of a sideways shove leans the torso over; the rest of it turns the torso instead.
     private const float BumpSideLean = 0.35f;
 
+    // Shoulder height over leg length, for a body whose arms did not resolve and for one nobody is ticking. Measured
+    // off a standing midlander; every race is within a few centimetres of it once scaled by the leg.
+    private const float ShoulderOverLeg = 1.45f;
+
+    // What runs into someone is the shoulder line, not the point on the floor between the feet: it leads by most of a
+    // foot when the body leans into a run, and swings across when it turns. Falls back to a height up the origin for a
+    // skeleton with no arms (a carbuncle-shaped model can reach this).
+    private static Vector3 ShoulderMid(in Frame f)
+    {
+        ref readonly var ch = ref f.St.Chain;
+        if (!ch.LeftArm.Resolved || !ch.RightArm.Resolved)
+        {
+            return f.PosAnchor with { Y = f.PosAnchor.Y + (ShoulderOverLeg * f.LegLen * f.Scale.Y) };
+        }
+
+        var mid = (Bones.Pos(in f.Bones[ch.LeftArm.Hip]) + Bones.Pos(in f.Bones[ch.RightArm.Hip])) * 0.5f;
+        return f.PosAnchor + Vector3.Transform(f.Scale * mid, f.Rot);
+    }
+
     // retire closes the gate whatever the character is doing, so the blend carries our offsets back off it.
     private void TickOne(Character* chr, CharState st, float dt, double rawDt, bool local, bool retire, ref Snapshot snap)
     {
@@ -142,6 +161,7 @@ public sealed unsafe partial class Plugin
             var hips = (Bones.Pos(in f.Bones[st.Chain.Left.Hip]).Y + Bones.Pos(in f.Bones[st.Chain.Right.Hip]).Y) * 0.5f;
             st.HipFrac = hips / f.LegLen;
             snap.HipFrac = st.HipFrac;
+            st.Torso = ShoulderMid(in f);
         }
 
         if (active && c.Bump)
@@ -737,6 +757,10 @@ public sealed unsafe partial class Plugin
         this.DropStaleNeighbours(now);
         var radius = c.BumpRadiusFrac * f.LegLen * f.Scale.Y;
         var myTop = chr->Height * chr->Scale;
+        var myTorso = st.Torso;
+        var myLift = MathF.Max(myTorso.Y - st.LastLogical.Y, 0f);
+        // Speed off the logical position, not off the shoulder: the torso swings with every stride, and differentiating
+        // that reads as a metre a second of noise while standing still.
         var vel = f.VelDir * f.Speed;
         // Indexed rather than enumerated: IObjectTable.GetEnumerator returns the interface, which allocates per frame.
         for (var i = 0; i < Objects.Length; i++)
@@ -756,8 +780,7 @@ public sealed unsafe partial class Plugin
                 continue;
             }
 
-            var to = o.Position - st.LastLogical;
-            if (MathF.Abs(to.Y) > f.LegLen * f.Scale.Y)
+            if (MathF.Abs(o.Position.Y - st.LastLogical.Y) > f.LegLen * f.Scale.Y)
             {
                 continue;
             }
@@ -774,6 +797,26 @@ public sealed unsafe partial class Plugin
             var theirTop = other->Height * other->Scale;
             var ratio = myTop > 1e-3f && theirTop > 1e-3f ? theirTop / myTop : 1f;
             var reach = radius * (1f + ratio);
+
+            if (!this.states.TryGetValue(o.Address, out var known) || known.Id != o.GameObjectId)
+            {
+                known = null;
+            }
+
+            // Their shoulders when something is ticking them, otherwise ours carried over by the height ratio and set
+            // above their own feet - which is the same answer to within the lean, and costs no pose walk.
+            var theirTorso = known != null && known.Torso != Vector3.Zero
+                ? known.Torso
+                : o.Position with { Y = o.Position.Y + (myLift * ratio) };
+
+            // Shoulder against shoulder rather than floor against floor: on stairs the body a step up is still within
+            // reach, while one on the balcony above is a torso away and out of it.
+            var to = theirTorso - myTorso;
+            if (MathF.Abs(to.Y) > f.LegLen * f.Scale.Y)
+            {
+                continue;
+            }
+
             to.Y = 0f;
             var d2 = to.LengthSquared();
             if (d2 > reach * reach || d2 < 1e-6f)
@@ -781,18 +824,17 @@ public sealed unsafe partial class Plugin
                 continue;
             }
 
-            // How fast the gap is closing, theirs counted as well as ours, so being run into while standing still
-            // lands exactly as running into them does.
+            // Their speed counts as well as ours, so being run into while standing still lands exactly as running into
+            // them does. Gated on the whole relative speed and merely on the gap shrinking, not on the speed along the
+            // line between them: measured where the bodies first touch, that component is near zero for anything but a
+            // head-on hit, so shoulder-to-shoulder passes at a full run were dropped.
             var dir = to / MathF.Sqrt(d2);
-            var approach = Vector3.Dot(vel - theirVel, dir);
-            if (approach < c.BumpMinSpeed)
+            var rel = vel - theirVel;
+            rel.Y = 0f;
+            var closing = rel.Length();
+            if (Vector3.Dot(rel, dir) <= 0f || closing < c.BumpMinSpeed)
             {
                 continue;
-            }
-
-            if (!this.states.TryGetValue(o.Address, out var known) || known.Id != o.GameObjectId)
-            {
-                known = null;
             }
 
             // Sitting or lying, nothing stands at shoulder height to run into. Mode covers the seated emotes; the hips
@@ -814,7 +856,7 @@ public sealed unsafe partial class Plugin
             st.BumpPush = -dir * Reaches(ratio);
             // The closing speed rather than our own, so a sprinter running into someone standing still knocks them
             // round as hard as running into them would have.
-            st.BumpBody = Math.Clamp(approach / RunSpeed, 0f, 1f);
+            st.BumpBody = Math.Clamp(closing / RunSpeed, 0f, 1f);
             if (known != null)
             {
                 known.BumpAge = Envelope(known.BumpAge, rise, c.BumpTau) * rise;

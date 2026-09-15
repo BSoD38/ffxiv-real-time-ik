@@ -421,7 +421,7 @@ internal sealed class Overlay : Window
             this.Slider("Whole-body turn", ref c.BumpBodyTurn, 0f, 1.5f, "%.2f",
                 "How much of the turn the whole body takes at running speed, hips and all, on top of the shoulders; the legs keep following the stride. Zero keeps every bump in the upper body; standing characters always do.");
             this.Slider("Bump speed", ref c.BumpMinSpeed, 0.2f, 10f, "%.1f m/s",
-                "How fast you must be moving towards someone for it to count as a bump. Set it above walking speed and only running bumps.");
+                "How fast the two of you must be closing on each other for it to count as a bump. Set it above walking speed and only running bumps; set it low and brushing past someone jolts you.");
             this.Slider("Bump rise", ref c.BumpRiseSeconds, 0.02f, 0.3f, "%.2f s",
                 "How quickly the body reaches its full flinch after the impact.");
             this.Slider("Bump recovery", ref c.BumpTau, 0.1f, 1.5f, "%.2f s",

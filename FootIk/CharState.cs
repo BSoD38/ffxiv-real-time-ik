@@ -19,6 +19,7 @@ internal sealed class CharState
     public Vector3 LastLogical;
     public bool FloorLoop;       // this EmoteLoop has been down on the floor, so it stays a floor pose until it ends
     public float HipFrac = 1f;   // hip height over leg length, last frame: the gate needs it before the pose resolves
+    public Vector3 Torso;        // world midpoint of the shoulders, zero until a pose resolves: what a bump runs into
     public readonly Vector3[] GatherShift = new Vector3[2]; // model space
     public readonly Vector3[] WallShift = new Vector3[2];   // model space
     public readonly Vector3[] LatchTarget = new Vector3[2]; // world space
