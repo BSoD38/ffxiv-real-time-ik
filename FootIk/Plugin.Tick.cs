@@ -79,9 +79,11 @@ public sealed unsafe partial class Plugin
         snap.Height = chr->Height * chr->Scale;
         snap.IsJumping = chr->IsJumping();
         snap.GPose = ClientState.IsGPosing;
-        snap.Conditions = Condition.Any(this.globalFlags) || (local && Condition.Any(this.gateFlags));
+        // Group pose may raise the cutscene condition too, so it is not trusted while posing on purpose.
+        var on = c.WorksIn(snap.GPose);
+        snap.Conditions = (!(on && snap.GPose) && Condition.Any(this.globalFlags)) || (local && Condition.Any(this.gateFlags));
         // MovementState is the per-character reading of what ICondition tells us about ourselves: flying and diving.
-        var clear = c.Enabled && !retire && !snap.Conditions && !snap.GPose && chr->MoveController.MovementState == MovementStateOptions.Normal;
+        var clear = on && !retire && !snap.Conditions && chr->MoveController.MovementState == MovementStateOptions.Normal;
         // InPositionLoop carries the EmoteMode row in ModeParam: 1 ground sit, 2 chair, 3 sleep. A chair is furniture,
         // not ground. Every other looping emote is EmoteLoop, a dance and /pushups alike, so the pose decides: latched
         // low, released high, because /pushups crosses any single threshold every rep. HipFrac is last frame's.
@@ -740,9 +742,9 @@ public sealed unsafe partial class Plugin
         for (var i = 0; i < Objects.Length; i++)
         {
             var o = Objects[i];
-            // People only. BattleNpc is every monster, pet, egi, carbuncle, chocobo companion and trust, none of which
-            // should shove or be shoved; minions and mounts are their own kinds and were never in.
-            if (o == null || o.Address == 0 || o.GameObjectId == st.Id || o.ObjectKind is not (ObjectKind.Pc or ObjectKind.EventNpc))
+            // Players, and townspeople only when asked. BattleNpc is every monster, pet, egi, carbuncle, chocobo companion
+            // and trust, none of which should shove or be shoved; minions and mounts are their own kinds and were never in.
+            if (o == null || o.Address == 0 || o.GameObjectId == st.Id || !(o.ObjectKind == ObjectKind.Pc || (c.BumpNpcs && o.ObjectKind == ObjectKind.EventNpc)))
             {
                 continue;
             }

@@ -11,6 +11,7 @@ public enum Block
     Settled, // it ran; this foot stands on its own ground, or on an incline where a foot below level is expected
     NoEdge, // the search found no standable ground to move onto
     Squeezed, // no two spots a stance apart: the feet stand closer than the minimum
+    TooFar, // the stance found would spread the feet or carry the body further than a body can: given up on
 }
 
 // Written once per tick, read on the draw thread.

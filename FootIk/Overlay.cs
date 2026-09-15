@@ -1,5 +1,6 @@
 using System;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 
@@ -17,7 +18,7 @@ internal sealed class Overlay : Window
     private static readonly string[][] TabFields =
     [
         [
-            nameof(Settings.Enabled), nameof(Settings.KeepFeetOutOfWalls), nameof(Settings.MaxRaiseFrac), nameof(Settings.MaxKneeBendDeg),
+            nameof(Settings.Where), nameof(Settings.KeepFeetOutOfWalls), nameof(Settings.MaxRaiseFrac), nameof(Settings.MaxKneeBendDeg),
             nameof(Settings.StraightenLimit), nameof(Settings.MaxAnkleAngleDeg), nameof(Settings.TiltFadeFrac), nameof(Settings.MaxDropFrac),
             nameof(Settings.MaxPelvisRaiseFrac), nameof(Settings.MaxStepDownFrac), nameof(Settings.BlendSeconds), nameof(Settings.PelvisTau),
             nameof(Settings.WallClearanceFrac), nameof(Settings.MaxStepFrac), nameof(Settings.LiftThresholdFrac), nameof(Settings.RayUpFrac),
@@ -26,13 +27,14 @@ internal sealed class Overlay : Window
         [
             nameof(Settings.GatherFeet), nameof(Settings.GatherToPosition), nameof(Settings.MinStanceFrac), nameof(Settings.GatherStraighten),
             nameof(Settings.GatherForward), nameof(Settings.GatherPrecision), nameof(Settings.GatherTauIn), nameof(Settings.GatherTauOut),
+            nameof(Settings.MaxStanceFrac), nameof(Settings.MaxBodyShiftFrac),
         ],
         [
             nameof(Settings.SlopeLean), nameof(Settings.LeanUphillGain), nameof(Settings.LeanDownhillGain), nameof(Settings.MaxLeanDeg),
             nameof(Settings.MoveWeapons), nameof(Settings.MaxTotalPitchDeg), nameof(Settings.MinTotalPitchDeg), nameof(Settings.LeanTau),
         ],
         [
-            nameof(Settings.Bump), nameof(Settings.Shoved), nameof(Settings.Grunt), nameof(Settings.BumpCooldown),
+            nameof(Settings.Bump), nameof(Settings.Shoved), nameof(Settings.BumpNpcs), nameof(Settings.Grunt), nameof(Settings.BumpCooldown),
             nameof(Settings.BumpSameCooldown), nameof(Settings.BumpRadiusFrac), nameof(Settings.BumpMaxDeg), nameof(Settings.BumpShoveFrac),
             nameof(Settings.BumpHeadHold), nameof(Settings.BumpBodyTurn), nameof(Settings.BumpMinSpeed), nameof(Settings.BumpRiseSeconds),
             nameof(Settings.BumpTau),
@@ -199,13 +201,12 @@ internal sealed class Overlay : Window
         Help(help);
     }
 
-    private void Combo(string label, ref Who v, string items, string help)
+    private void Combo<T>(string label, ref T v, string items, string help) where T : struct, Enum
     {
         this.SetWidth(label);
-        var i = (int)v;
+        ref var i = ref Unsafe.As<T, int>(ref v);
         if (ImGui.Combo(label, ref i, items))
         {
-            v = (Who)i;
             this.plugin.SaveSettings();
         }
 
@@ -249,7 +250,8 @@ internal sealed class Overlay : Window
         var c = this.plugin.Settings;
         var L = this.plugin.Snap.LegLength;
 
-        this.Check("Enabled", ref c.Enabled);
+        this.Combo("Enabled", ref c.Where, "Off\0In game\0In group pose\0In game and group pose\0",
+            "Where the plugin places feet. Group pose is off by default: posing tools such as Brio and Ktisis move the same bones, and the two will fight over them.");
         ImGui.Spacing();
         this.Check("Keep feet out of walls", ref c.KeepFeetOutOfWalls);
         Help("Stops the feet from clipping into walls, kerbs and steps by moving them slightly aside. Works best when feet gathering is enabled.");
@@ -325,6 +327,10 @@ internal sealed class Overlay : Window
             ImGui.Spacing();
             this.Slider("Min stance", ref c.MinStanceFrac, 0.02f, 0.4f, $"%.2f  ({c.MinStanceFrac * L:F2} m)",
                 "How close the feet can be of each other when gathering. Avoids the feet crossing or overlapping each other.");
+            this.Slider("Max stance", ref c.MaxStanceFrac, 0.5f, 4f, $"%.2f  ({c.MaxStanceFrac * L:F2} m)",
+                "How far apart the feet may end up when gathering. Wider than this and the plugin leaves the feet alone for that frame, so a bad reading never splays the legs.");
+            this.Slider("Max body move", ref c.MaxBodyShiftFrac, 0.25f, 3f, $"%.2f  ({c.MaxBodyShiftFrac * L:F2} m)",
+                "How far gathering may move your character's body onto the feet. Further than this and the plugin leaves the feet alone for that frame, so a bad reading never throws your character across the room.");
             this.Slider("Straighten legs", ref c.GatherStraighten, 0f, 1f, "%.2f",
                 "How much the legs straighten when the feet are gathered. Avoids legs being flexed while gathered on some races.");
             this.Slider("Feet forward", ref c.GatherForward, 0f, 1f, "%.2f",
@@ -376,15 +382,18 @@ internal sealed class Overlay : Window
         var c = this.plugin.Settings;
         var L = this.plugin.Snap.LegLength;
 
-        this.Check("Flinch when running into someone", ref c.Bump);
+        this.Check("Flinch when bumping into someone", ref c.Bump);
         Help("Allows you to shove people when running into them. The shove depends on the speed and angle of impact, the difference in height of both people, and other factors.");
         ImGui.Spacing();
         ImGui.BeginDisabled(!c.Bump);
+        this.Check("Bump into NPCs", ref c.BumpNpcs);
+        Help("Whether NPCs count. Off, only players can bump you or be bumped. This is separate from who gets their feet placed on the Performance tab.");
         this.Check("Let others shove you", ref c.Shoved);
         Help("Other players running or walking into you shove you as well.");
         ImGui.TextDisabled("They flinch back only when \"Other players\" or \"Everyone\" is set in the performance settings.");
         ImGui.EndDisabled();
 
+        ImGui.Spacing();
         ImGui.BeginDisabled(!c.Bump);
         this.Check("Grunt when shoved", ref c.Grunt);
         Help("Make both characters grunt when they one or the other is shoved. Has a random chance of playing a grunt.");
@@ -510,7 +519,7 @@ internal sealed class Overlay : Window
         this.Check("Show a one-metre ruler at your feet", ref c.ShowRuler);
 
         Section("Your character");
-        ImGui.TextUnformatted(Activity(in s, c.Enabled));
+        ImGui.TextUnformatted(Activity(in s, c.Where));
         ImGui.TextUnformatted($"Moving at {s.Speed:F1} m/s");
         ImGui.TextUnformatted($"Body height {Cm(s.Applied)}   lean {s.LeanDeg:F0} deg   bump {s.BumpDeg:F0} deg   tilt to the ground {s.SitTiltDeg:F0} deg");
 
@@ -637,9 +646,9 @@ internal sealed class Overlay : Window
         }
     }
 
-    private static string Activity(in Snapshot s, bool enabled)
+    private static string Activity(in Snapshot s, Where where)
     {
-        if (!enabled)
+        if (where == Where.Off)
         {
             return "Switched off.";
         }
@@ -649,9 +658,14 @@ internal sealed class Overlay : Window
             return "No character to work on.";
         }
 
-        if (s.GPose)
+        if (s.GPose && where == Where.InGame)
         {
             return "Paused in group pose.";
+        }
+
+        if (!s.GPose && where == Where.GroupPose)
+        {
+            return "Waiting for group pose.";
         }
 
         if (s.Conditions)

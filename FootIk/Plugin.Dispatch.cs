@@ -18,6 +18,12 @@ public sealed unsafe partial class Plugin
 
     private readonly ConditionFlag[] globalFlags = [ConditionFlag.WatchingCutscene, ConditionFlag.BetweenAreas];
 
+    // In group pose the game renders copies of the characters, kept in these object-table slots, and hides the
+    // originals. A copy keeps the name and home world but not the entity id.
+    private const int PosedFirst = 200;
+    private const int PosedLast = 239;
+    private nint posedAddr;
+
     private void Tick()
     {
         var now = this.clock.Elapsed.TotalSeconds;
@@ -40,6 +46,17 @@ public sealed unsafe partial class Plugin
             this.TickOne((Character*)localAddr, st, dt, rawDt, local: true, retire: false, ref snap);
         }
 
+        // The original is ticked as well: hidden, it costs rays and nothing else.
+        var posed = localAddr != 0 && ClientState.IsGPosing && this.Settings.WorksIn(true) ? this.FindPosed((Character*)localAddr) : null;
+        this.posedAddr = posed?.Address ?? 0;
+        if (posed != null)
+        {
+            var st = this.StateFor(posed.Address, posed.GameObjectId);
+            st.Seen = true;
+            snap = default;
+            this.TickOne((Character*)posed.Address, st, dt, rawDt, local: true, retire: false, ref snap);
+        }
+
         this.Snap = snap;
         this.Sweep(localAddr, lp, dt, rawDt);
     }
@@ -51,7 +68,7 @@ public sealed unsafe partial class Plugin
     {
         var c = this.Settings;
         var cap = lp == null || !c.Others ? 0 : Math.Clamp(c.MaxOthers, 0, MaxTracked);
-        this.Tracked = localAddr == 0 ? 0 : 1;
+        this.Tracked = (localAddr == 0 ? 0 : 1) + (this.posedAddr == 0 ? 0 : 1);
         if (cap == 0 && this.states.Count <= this.Tracked)
         {
             return;
@@ -67,7 +84,7 @@ public sealed unsafe partial class Plugin
         for (var i = 0; i < Objects.Length; i++)
         {
             var o = Objects[i];
-            if (o == null || o.Address == 0 || o.Address == localAddr)
+            if (o == null || o.Address == 0 || o.Address == localAddr || o.Address == this.posedAddr)
             {
                 continue;
             }
@@ -151,7 +168,7 @@ public sealed unsafe partial class Plugin
     {
         foreach (var (addr, st) in this.states)
         {
-            if (addr == localAddr || picked.Contains(addr))
+            if (addr == localAddr || addr == this.posedAddr || picked.Contains(addr))
             {
                 continue;
             }
@@ -168,6 +185,27 @@ public sealed unsafe partial class Plugin
                 this.states.Remove(addr);
             }
         }
+    }
+
+    private IGameObject? FindPosed(Character* self)
+    {
+        var last = Math.Min(PosedLast, Objects.Length - 1);
+        for (var i = PosedFirst; i <= last; i++)
+        {
+            var o = Objects[i];
+            if (o == null || o.Address == 0 || o.ObjectKind != ObjectKind.Pc)
+            {
+                continue;
+            }
+
+            var chr = (Character*)o.Address;
+            if (chr->HomeWorld == self->HomeWorld && chr->GameObject.Name.SequenceEqual(self->GameObject.Name))
+            {
+                return o;
+            }
+        }
+
+        return null;
     }
 
     private CharState StateFor(nint address, ulong id)

@@ -171,6 +171,23 @@ public sealed unsafe partial class Plugin
             this.Tighten(target, free, level, minSep, footLen, side, fwd, in f);
         }
 
+        // A stance no body could take is a sign the inputs are wrong, not a pose to strike: the body would be carried
+        // metres along with it. The comparison is written so a NaN fails it too.
+        Span<Vector3> stand = stackalloc Vector3[2];
+        stand[0] = found && iL >= 0 ? target[0] : snap.Left.AnkleWorld;
+        stand[1] = found && iR >= 0 ? target[1] : snap.Right.AnkleWorld;
+        var legWorld = f.LegLen * f.Scale.Y;
+        var spread = new Vector3(stand[1].X - stand[0].X, 0f, stand[1].Z - stand[0].Z).Length();
+        var shift = new Vector3(((stand[0].X + stand[1].X) * 0.5f) - centre.X, 0f, ((stand[0].Z + stand[1].Z) * 0.5f) - centre.Z).Length();
+        if (!(spread <= c.MaxStanceFrac * legWorld && shift <= c.MaxBodyShiftFrac * legWorld))
+        {
+            snap.Left.GatherBlock = Block.TooFar;
+            snap.Right.GatherBlock = Block.TooFar;
+            f.St.Latched[0] = false;
+            f.St.Latched[1] = false;
+            return;
+        }
+
         for (var s = 0; s < 2; s++)
         {
             if (!place[s])

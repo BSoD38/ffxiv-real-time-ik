@@ -18,7 +18,7 @@ Milestone state (2026-09-12): M0–M4 and M5b done and in-game verified. M5 (sta
 Load-bearing invariants:
 
 - **All work happens in the `RenderManager::Render` detour, before `Original`.** Edits made from `Framework.Update` do not survive to the rendered frame; this was demonstrated in game with a diagnostic toggle that has since been removed.
-- **Guards before every dereference.** An access violation is not catchable in .NET; `try/catch` only covers managed math bugs. `ResolvePose` owns the pointer, object-type and bounds checks for the pose. Two reads sit outside it and carry their own full chain: `FindBump` (non-null wrapper, non-zero address, object-kind filter, null draw object) and `AnchorWeapons` (draw-object type, attach type and owner, attachment count, bone index against `ModelPose.Length`). Nothing else dereferences game memory unchecked.
+- **Guards before every dereference.** An access violation is not catchable in .NET; `try/catch` only covers managed math bugs. `ResolvePose` owns the pointer, object-type and bounds checks for the pose. Three reads sit outside it and carry their own full chain: `FindBump` (non-null wrapper, non-zero address, object-kind filter, null draw object), `FindPosed` (non-null wrapper, non-zero address, Pc kind, then name and home world) and `AnchorWeapons` (draw-object type, attach type and owner, attachment count, bone index against `ModelPose.Length`). Nothing else dereferences game memory unchecked.
 - **`Original` is always called and never inside the `try`.** The fault breaker counts managed faults, trips inert after 5, and is re-armed only from the UI.
 - **`DrawOffset` writes are delta-only.** SimpleHeels and friends write the same field; we track `written` and only ever add or remove our own delta. **`Dispose` removes it**, so the character is never left sunk.
 - **Y through `SetDrawOffset`, X/Z through the movement hook.** The game only honours the Y component of the draw offset.
@@ -115,7 +115,7 @@ dotnet build FootIk/FootIk.csproj -c Release
 
 Dev-load `FootIk\bin\Release\FootIk.dll` via `/xlplugins`.
 
-**In-game verification loop:** build → `/xlplugins` dev-reload → `/ik` → the Feet / Ankles / Edges / Lean / Emotes / Performance / Status tabs. Toggling `Enabled` is the A/B. Anything touching hooks, collision or bone writes **can only be verified in game** — say so explicitly rather than claiming verification from a green build.
+**In-game verification loop:** build → `/xlplugins` dev-reload → `/ik` → the Feet / Ankles / Edges / Lean / Emotes / Performance / Status tabs. The `Enabled` dropdown is the A/B. Anything touching hooks, collision or bone writes **can only be verified in game** — say so explicitly rather than claiming verification from a green build.
 
 ## Workflow
 

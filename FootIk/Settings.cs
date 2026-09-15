@@ -4,6 +4,15 @@ using Dalamud.Configuration;
 
 namespace FootIk;
 
+// Where the mod works. Saved under its own name: the old `Enabled` bool in a saved file would not read into an enum.
+public enum Where
+{
+    Off,
+    InGame,
+    GroupPose,
+    Both,
+}
+
 // Who the mod works on besides you, widest first.
 public enum Who
 {
@@ -19,7 +28,7 @@ public sealed class Settings : IPluginConfiguration
 {
     public int Version { get; set; } = 1;
 
-    public bool Enabled = true;
+    public Where Where = Where.InGame; // group pose off by default: posing tools move the same bones
     public bool ShowMarkers;
     public bool ShowRuler;
     public float BlendSeconds = 0.15f;
@@ -49,6 +58,8 @@ public sealed class Settings : IPluginConfiguration
     public bool KeepFeetOutOfWalls = true;
     public float WallClearanceFrac = 0.06f; // half a foot's width: the box a foot may not stand inside a wall with
     public float MinStanceFrac = 0.10f;
+    public float MaxStanceFrac = 2f;    // feet targets further apart than this are given up on
+    public float MaxBodyShiftFrac = 1f; // a gathered stance that would carry the body further than this is given up on
     public float GatherStraighten = 0.7f;
     public float GatherForward = 0.7f;
     public float MaxPelvisRaiseFrac = 0.3f;
@@ -64,6 +75,7 @@ public sealed class Settings : IPluginConfiguration
 
     public bool Bump;
     public bool Shoved = true;           // someone running into you counts, not only you running into them
+    public bool BumpNpcs;                // townspeople count as people to bump into
     public bool Grunt;                   // both bodies play their own damage-taken voice line on a bump
     public float BumpRadiusFrac = 0.45f; // half the centre distance at which two bodies touch, in leg lengths
     public float BumpMinSpeed = 5f;      // m/s closing on them, a world speed like StillSpeed
@@ -89,6 +101,8 @@ public sealed class Settings : IPluginConfiguration
     public bool MeshRefine; // experimental: the ground height read off the visible level geometry, gated by collision
     public float MeshRadius = 30f; // yalms around the local player that are read, a world distance like OthersRadius
     public float MeshBand = 0.35f; // metres the visible ground may differ from collision and still be believed: about a tall stair tread, a property of the level rather than the character
+
+    public bool WorksIn(bool groupPose) => groupPose ? this.Where is Where.GroupPose or Where.Both : this.Where is Where.InGame or Where.Both;
 
     // Puts fields back to how they shipped; null resets every one of them.
     public void Reset(string[]? fields = null)
