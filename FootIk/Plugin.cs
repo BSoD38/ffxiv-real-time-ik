@@ -2,18 +2,20 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Numerics;
+using System.Threading;
+using System.Threading.Tasks;
 using Dalamud.Game.Command;
 using Dalamud.Hooking;
-using Dalamud.Interface.Windowing;
 using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
 using FFXIVClientStructs.FFXIV.Client.Graphics.Scene;
+using KamiToolKit;
 
 namespace FootIk;
 
-public sealed unsafe partial class Plugin : IDalamudPlugin
+public sealed unsafe partial class Plugin : IAsyncDalamudPlugin
 {
     // Both from CustomizePlus Core/Data/Constants.cs.
     // Render: bone edits made here, before Original, survive to the rendered frame.
@@ -55,9 +57,8 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
 
     private readonly Hook<RenderDelegate>? renderHook;
     private readonly Hook<MoveDelegate>? moveHook;
-    private readonly Overlay overlay;
-    private readonly WindowSystem windows = new("FootIk");
     private readonly Stopwatch clock = Stopwatch.StartNew();
+    private Overlay? overlay;
 
     // Keyed by the character address, which the allocator reuses, so each state carries the spawn id it belongs to.
     // Read from both detours; they run on the same thread, so no synchronisation.
@@ -106,18 +107,26 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
             Log.Error(ex, "FootIk: movement hook unavailable, horizontal body offsets disabled");
         }
 
-        this.overlay = new Overlay(this);
-        this.windows.AddWindow(this.overlay);
-        PluginInterface.UiBuilder.Draw += this.windows.Draw;
-        PluginInterface.UiBuilder.Draw += this.overlay.DrawWorldDots;
         PluginInterface.UiBuilder.Draw += this.UpdateMesh;
         Framework.Update += this.PlayGrunts;
-        PluginInterface.UiBuilder.OpenMainUi += this.overlay.Toggle;
-        PluginInterface.UiBuilder.OpenConfigUi += this.overlay.Toggle;
-        Commands.AddHandler("/ik", new CommandInfo((_, _) => this.overlay.Toggle()) { HelpMessage = "Toggle the Inverse Kinematics window." });
+
         // A wrong solver writes wrong-but-finite poses, which no guard downstream can catch: start inert instead.
         this.Tripped = this.SelfTest != "PASS";
         Log.Information("FootIk loaded. {Status}. {Move}. Solver self-test: {Test}", this.HookStatus, this.MoveHookStatus, this.SelfTest);
+    }
+
+    // The window waits on KamiToolKit loading its textures, and nothing in this class may await: `unsafe` forbids it.
+    public Task LoadAsync(CancellationToken cancellationToken) => Overlay.InstallAsync(this);
+
+    // Called back once the window can be built. The hooks have been live since the constructor; nothing on the tick
+    // path touches the window.
+    internal void AttachWindow(Overlay window)
+    {
+        this.overlay = window;
+        PluginInterface.UiBuilder.Draw += window.DrawWorldDots;
+        PluginInterface.UiBuilder.OpenMainUi += window.Toggle;
+        PluginInterface.UiBuilder.OpenConfigUi += window.Toggle;
+        Commands.AddHandler("/ik", new CommandInfo((_, _) => window.Toggle()) { HelpMessage = "Toggle the Inverse Kinematics window." });
     }
 
     public void Rearm()
@@ -290,20 +299,33 @@ public sealed unsafe partial class Plugin : IDalamudPlugin
         this.Tracked = 0;
     }
 
-    public void Dispose()
+    public ValueTask DisposeAsync()
+    {
+        Commands.RemoveHandler("/ik");
+        Framework.Update -= this.PlayGrunts;
+        PluginInterface.UiBuilder.Draw -= this.UpdateMesh;
+
+        var window = this.overlay;
+        this.overlay = null;
+        if (window is not null)
+        {
+            PluginInterface.UiBuilder.Draw -= window.DrawWorldDots;
+            PluginInterface.UiBuilder.OpenMainUi -= window.Toggle;
+            PluginInterface.UiBuilder.OpenConfigUi -= window.Toggle;
+        }
+
+        return Overlay.ShutdownAsync(this, window);
+    }
+
+    // Hooks come down before the offsets they would re-add, and the last of our own offsets comes off before the
+    // movement hook that carries the horizontal share. Unlike the old synchronous Dispose, this runs on the
+    // framework thread only because the caller puts it there: `Release` reads the object table, which throws
+    // anywhere else.
+    internal void Teardown()
     {
         this.renderHook?.Dispose();
         this.Release();
         this.moveHook?.Dispose();
-
-        Commands.RemoveHandler("/ik");
-        Framework.Update -= this.PlayGrunts;
-        PluginInterface.UiBuilder.Draw -= this.windows.Draw;
-        PluginInterface.UiBuilder.Draw -= this.overlay.DrawWorldDots;
-        PluginInterface.UiBuilder.Draw -= this.UpdateMesh;
         this.DisposeMesh();
-        this.windows.RemoveAllWindows();
-        PluginInterface.UiBuilder.OpenMainUi -= this.overlay.Toggle;
-        PluginInterface.UiBuilder.OpenConfigUi -= this.overlay.Toggle;
     }
 }

@@ -25,14 +25,14 @@ Load-bearing invariants:
 - **Distances are fractions of the bind-pose leg length** (`*Frac` settings), so every race behaves alike. No hardcoded metres.
 - **`float.IsFinite` before any write to the pose** — skip the frame rather than write a NaN into the skeleton.
 - **`RaycastHit.Normal` reads zero in game.** Ground height and normal come from the hit triangle (`V1/V2/V3`) via `GroundAt`.
-- **Settings save when an edit finishes, never while it is in progress.** `SavePluginConfig` writes the file synchronously on the draw thread, so sliders save on `IsItemDeactivatedAfterEdit`, not on change. `Settings.Repair()` replaces non-finite floats at load: a NaN read from a hand-edited file passes every `<`/`>` guard downstream.
+- **Settings save when an edit settles, never while it is in progress.** `SavePluginConfig` writes the file synchronously on the draw thread, and a native slider reports every step of a drag, so an edit marks the window dirty and `Overlay.OnUpdate` flushes it half a second after the last change (and on hide). `Settings.Repair()` replaces non-finite floats at load: a NaN read from a hand-edited file passes every `<`/`>` guard downstream.
 
 ## Tech Stack
 
 - **.NET 10 / C# 14** via **`Dalamud.NET.Sdk/15.0.0`** — the SDK supplies `net10.0-windows`, LangVersion 14, x64, nullable, unsafe blocks, the lock file, DalamudPackager and the Dalamud references. **Do not set any of these in the csproj.**
 - **FFXIVClientStructs** (via the SDK) — `hkaPose`/`hkaSkeleton`, `BGCollisionModule`, `Character`/`GameObject`.
-- **ImGui** via Dalamud windowing for the `/ik` overlay.
-- **Zero NuGet references.** No database, no auth, no web stack, no test project — verification happens **in game** (see Workflow). `Solver.SelfTest()` is the only automated check and it runs at load.
+- **KamiToolKit** for the `/ik` window, which is built from the game's own ATK nodes. **ImGui** survives only for the world markers, which are drawn over the scene rather than in a window.
+- **One NuGet reference (KamiToolKit).** No database, no auth, no web stack, no test project — verification happens **in game** (see Workflow). `Solver.SelfTest()` is the only automated check and it runs at load.
 
 ## Architecture
 
@@ -53,7 +53,7 @@ FootIk/LegChain.cs        # bone lookup by name, subtrees, bind-pose rest / leg 
                           #   Havok transform read/write
 FootIk/Settings.cs        # all tunables; IPluginConfiguration, saved when a widget edit completes
 FootIk/Snapshot.cs        # per-frame readouts, written once per tick, read on the draw thread
-FootIk/Overlay.cs         # /ik window + world markers
+FootIk/Overlay.cs         # /ik window as a KamiToolKit NativeAddon: tab bar, scrolling body, widget builders + ImGui world markers
 docs/PLAN.md              # the source of truth for research, offsets and milestones
 ```
 
@@ -83,7 +83,7 @@ The csproj **is** the plugin manifest (Name, Punchline, Description, Tags…). *
 - **Comments are self-contained.** No milestone ids, no `docs/PLAN.md` pointers, nothing that needs the docs to read: someone opening the file cold gets the whole reason from the comment. Name the experiment and why it failed, not where it is written up. `docs/PLAN.md` still records everything in full — it is the archive, not a dependency of the code.
 - **Signature strings live only in the consts at the top of `Plugin.cs`**, each with its provenance comment.
 - **Dispose discipline** — hooks disposed, offsets undone, command and UiBuilder handlers removed, in reverse order.
-- **Thread discipline** — game reads and pose writes only inside the render detour; ImGui only in `Draw`; the overlay reads the `Snap` written once per tick. No I/O anywhere on that path.
+- **Thread discipline** — game reads and pose writes only inside the render detour; ImGui only in `Draw`, node building and node writes only in the addon callbacks; the overlay reads the `Snap` written once per tick. No I/O anywhere on that path.
 
 ## Skills
 
@@ -130,7 +130,7 @@ Dev-load `FootIk\bin\Release\FootIk.dll` via `/xlplugins`.
 Do NOT generate code that:
 
 - **Hand-authors `FootIk.json` or `FootIk.yaml`** beside the csproj — silently kills the manifest
-- **Sets SDK-provided csproj properties** (TFM, LangVersion, platform, nullable, unsafe) or adds NuGet references
+- **Sets SDK-provided csproj properties** (TFM, LangVersion, platform, nullable, unsafe) or adds a NuGet reference beyond KamiToolKit
 - **Dereferences a game pointer outside the `ResolvePose` guard chain**, or wraps a pointer walk in `try/catch` and calls that safe
 - **Does pose work in `Framework.Update`** — the edits do not survive to render
 - **Calls `Original` inside the `try`, or conditionally** — it runs every frame, always

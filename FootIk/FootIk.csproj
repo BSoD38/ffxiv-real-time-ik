@@ -14,6 +14,10 @@
     <AcceptsFeedback>true</AcceptsFeedback>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="KamiToolKit" Version="2.2.42" />
+  </ItemGroup>
+
   <!-- Dalamud reads an installed plugin's icon from images\icon.png beside the DLL. This copy covers a dev-loaded
        build, which runs straight out of the output folder. -->
   <ItemGroup>

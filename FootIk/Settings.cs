@@ -1,25 +1,27 @@
 using System;
+using System.ComponentModel;
 using System.Reflection;
 using Dalamud.Configuration;
 
 namespace FootIk;
 
 // Where the mod works. Saved under its own name: the old `Enabled` bool in a saved file would not read into an enum.
+// The descriptions are what the settings window puts in the dropdown.
 public enum Where
 {
-    Off,
-    InGame,
-    GroupPose,
-    Both,
+    [Description("Off")] Off,
+    [Description("In game")] InGame,
+    [Description("In group pose")] GroupPose,
+    [Description("In game and group pose")] Both,
 }
 
 // Who the mod works on besides you, widest first.
 public enum Who
 {
-    Everyone,
-    Players,
-    FriendsAndParty,
-    Party,
+    [Description("Everyone")] Everyone,
+    [Description("Other players")] Players,
+    [Description("Friends and party")] FriendsAndParty,
+    [Description("Party only")] Party,
 }
 
 // Fields ending in Frac are fractions of the bind-pose leg length, so races of every size behave alike.
