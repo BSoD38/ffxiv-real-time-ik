@@ -45,6 +45,9 @@ public sealed unsafe partial class Plugin
         public float GatherWant;
     }
 
+    // Cached: Span.Sort takes a delegate, and a lambda written at the call site would allocate one per frame per foot.
+    private static readonly Comparison<RaycastHit> ByHeight = (a, b) => a.Point.Y.CompareTo(b.Point.Y);
+
     private const float StillSpeed = 0.15f; // m/s, not a *Frac: every race moves at the same world speed.
     private const float RunSpeed = 6f;      // m/s, a flat-out run on foot
     private const float WarpSpeed = 30f;    // m/s: faster than any mount, so a step this large is a teleport, not travel
@@ -392,22 +395,8 @@ public sealed unsafe partial class Plugin
             return;
         }
 
-        // Sorting network by height: three hits give the median, two give the lower (never float over a void edge).
-        if (n > 1 && cand[1].Point.Y < cand[0].Point.Y)
-        {
-            (cand[0], cand[1]) = (cand[1], cand[0]);
-        }
-
-        if (n > 2 && cand[2].Point.Y < cand[1].Point.Y)
-        {
-            (cand[1], cand[2]) = (cand[2], cand[1]);
-        }
-
-        if (n > 2 && cand[1].Point.Y < cand[0].Point.Y)
-        {
-            (cand[0], cand[1]) = (cand[1], cand[0]);
-        }
-
+        // Three hits give the median, two give the lower (never float over a void edge).
+        cand[..n].Sort(ByHeight);
         var chosen = n == 3 ? cand[1] : cand[0];
 
         foot.HitPoint = chosen.Point;
@@ -682,7 +671,7 @@ public sealed unsafe partial class Plugin
 
         if (poseOk && snap.SitTiltDeg > 0.05f)
         {
-            RotateBody(f.Skel, f.Pose, f.St.Tilt);
+            MoveBody(f.Skel, f.Pose, f.St.Tilt, Vector3.Zero);
         }
     }
 
@@ -949,7 +938,7 @@ public sealed unsafe partial class Plugin
         // The twist goes innermost so the tip lands exactly along the push rather than swung round by the yaw.
         var turn = lean * pitch * twist;
 
-        // Read here rather than at the turn below because the head is held against this too: RotateBody carries the
+        // Read here rather than at the turn below because the head is held against this too: MoveBody carries the
         // neck with everything else, so a counter applied before it has to undo both.
         var bodyYaw = twistAngle * st.BumpBody * c.BumpBodyTurn;
         var yawing = MathF.Abs(bodyYaw) >= 0.002f;
@@ -991,14 +980,10 @@ public sealed unsafe partial class Plugin
             bend[s] = Bones.Pos(in f.Bones[leg.Knee]) - Bones.Pos(in f.Bones[leg.Hip]);
         }
 
-        if (yawing)
+        var shoving = shove.LengthSquared() >= 1e-8f && float.IsFinite(shove.X + shove.Z);
+        if (yawing || shoving)
         {
-            RotateBody(f.Skel, f.Pose, q);
-        }
-
-        if (shove.LengthSquared() >= 1e-8f && float.IsFinite(shove.X + shove.Z))
-        {
-            TranslateBody(f.Skel, f.Pose, shove);
+            MoveBody(f.Skel, f.Pose, q, shoving ? shove : Vector3.Zero);
         }
 
         var back = Quaternion.Inverse(q);

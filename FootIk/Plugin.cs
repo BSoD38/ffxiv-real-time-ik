@@ -116,7 +116,7 @@ public sealed unsafe partial class Plugin : IAsyncDalamudPlugin
     }
 
     // The window waits on KamiToolKit loading its textures, and nothing in this class may await: `unsafe` forbids it.
-    public Task LoadAsync(CancellationToken cancellationToken) => Overlay.InstallAsync(this);
+    public Task LoadAsync(CancellationToken cancellationToken) => Overlay.InstallAsync(this, cancellationToken);
 
     // Called back once the window can be built. The hooks have been live since the constructor; nothing on the tick
     // path touches the window.

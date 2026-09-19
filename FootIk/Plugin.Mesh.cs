@@ -1,9 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Numerics;
-using System.Threading;
 using System.Threading.Tasks;
 using FFXIVClientStructs.FFXIV.Client.LayoutEngine;
 using FFXIVClientStructs.FFXIV.Client.LayoutEngine.Layer;
@@ -22,16 +20,16 @@ namespace FootIk;
 public sealed unsafe partial class Plugin
 {
     private const float MeshCell = 1f; // metres: a property of the level, not of the character
-    private const float MeshNearRange = 6f; // metres from you: which parts the Mesh tab lists
     private const float MeshMaxSpan = 64f; // metres: a triangle wider than this is bucketed on a grid this coarse instead of the 1 m one
     private const float MeshMaxWide = 4096f; // metres: bounds the coarse-grid inserts per triangle; nothing walkable has come close
-    internal const float MeshMaxSphere = 2500f; // metres: real floor parts have carried spheres of 2428 m; this only keeps out the sky
+    private const float MeshMaxSphere = 2500f; // metres: real floor parts have carried spheres of 2428 m; this only keeps out the sky
 
-    // A sphere that size cannot say whether a part is within the radius, so the radius no longer bounds what is held:
-    // these do. Both are soft - a build already queued still finishes - and both free themselves again as the parts
-    // behind you fall out of range and are dropped.
-    private const int MeshMaxTriangles = 1_000_000; // over every part held: about 36 MB of vertices before the grids
-    private const int MeshMaxInserts = 500_000;     // cell inserts within one part, 25x what a building has needed
+    // Cell inserts within one part, 25x what a building has needed; soft, a build already queued still finishes. No
+    // budget over every part held: one was tried, checked at queue time against what had been built so far, and the
+    // first scan after enabling queues everything in range against zero, so it only ever refused the parts walked onto
+    // later, and with the floor under you unread the refine sank the foot to the terrain beneath. A whole zone read at
+    // once came to 4.6 M triangles and the client carried it.
+    private const int MeshMaxInserts = 500_000;
 
     // One placed object: its world-space triangles, three vertices each, bucketed on an XZ grid. Built once on the
     // worker when it enters the radius and dropped when it leaves, so moving never rebuilds what is already there.
@@ -48,9 +46,7 @@ public sealed unsafe partial class Plugin
         public int Stamp;
         public bool Built;
         public int Kept;
-        public int Dropped;
         public bool Queued;
-        public bool Parented;
         public Vector3[] Tris = [];
         public float MinX, MaxX, MinZ, MaxZ;
         public Dictionary<long, List<int>> Cells = [];
@@ -86,65 +82,31 @@ public sealed unsafe partial class Plugin
     private readonly Dictionary<nint, MeshEntry> entries = [];
     private readonly ConcurrentQueue<MeshEntry> toBuild = new();
     private readonly ConcurrentQueue<MeshEntry> built = new();
-    private readonly List<(float Dist, string Line)> nearby = [];
-    private readonly List<(float Dist, string Line)> under = [];
-    private readonly List<string> huge = [];
     private Task? worker;
     private volatile bool meshStop;
     private volatile bool meshFlush;
-    private int meshFailed;
-    private int meshRays;
+    private int triangles;
     private int stamp;
     private uint meshTerritory;
     private double lastScan;
 
+    // What the Performance tab shows: how much is held, and the reason it switched itself off if it did.
     public string MeshStatus { get; private set; } = "off";
-    public string MeshPlateSample { get; private set; } = string.Empty;
-    public Vector3 MeshOrigin { get; private set; }
-    public IReadOnlyList<(float Dist, string Line)> MeshNearby => this.nearby;
-    public IReadOnlyList<(float Dist, string Line)> MeshUnder => this.under;
-    public IReadOnlyList<string> MeshHuge => this.huge;
-
-    // Raised by the Mesh tab each frame it is open and cleared once the scan has read it: the lists above cost real
-    // work to fill and nothing but that tab reads them.
-    public bool MeshDetail { get; set; }
-
-    public string MeshLastPath { get; private set; } = string.Empty;
-    public bool MeshLastSolid { get; private set; }
-    public bool MeshLastUp { get; private set; }
-    public float MeshLastSpan { get; private set; }
-    public int MeshParts { get; private set; }
-    public int MeshWithCollider { get; private set; }
-    public int MeshPlates { get; private set; }
-    public int MeshFailed => this.meshFailed;
-    public int MeshTriangles { get; private set; }
-    public int MeshRefined { get; private set; }
-    public int MeshMissed { get; private set; }
-    public int MeshObjects => this.entries.Count;
-
-    // A refine scans every entry, so this times the count above is the per-frame cost, and a gather search raises it by
-    // two orders of magnitude over a plain stand. The totals beside it only say whether the mesh is being hit at all.
-    public int MeshRaysPerFrame { get; private set; }
-    public float MeshLastDelta { get; private set; }
-    public double MeshScanMs { get; private set; }
-    public double MeshBuildMs { get; private set; }
-    public double MeshBuildMaxMs { get; private set; }
 
     // UiBuilder.Draw: the main thread, like the render detour. Only the layout scan and the hand-back run here; the
     // file reads and the bucketing run on the worker.
     private void UpdateMesh()
     {
-        this.MeshRaysPerFrame = this.meshRays;
-        this.meshRays = 0;
         if (!this.Settings.MeshRefine)
         {
             if (this.entries.Count > 0)
             {
                 this.entries.Clear();
                 this.toBuild.Clear();
-                this.nearby.Clear();
-                this.MeshTriangles = 0;
-                this.MeshStatus = "off";
+                this.triangles = 0;
+
+                // A fault turns the setting off itself, and its message is the only thing that says why: keep it.
+                this.MeshStatus = this.MeshStatus.StartsWith("error", StringComparison.Ordinal) ? this.MeshStatus : "off";
             }
 
             return;
@@ -162,10 +124,15 @@ public sealed unsafe partial class Plugin
             if (now - this.lastScan >= 1.0)
             {
                 this.lastScan = now;
+                // The old zone's parts go now rather than on the sweep below: Track does not compare the model path, so
+                // a freed address reused at the same placement would keep the old zone's triangles.
                 if (ClientState.TerritoryType != this.meshTerritory)
                 {
                     this.meshTerritory = ClientState.TerritoryType;
                     this.meshFlush = true;
+                    this.entries.Clear();
+                    this.toBuild.Clear();
+                    this.triangles = 0;
                 }
 
                 this.ScanMesh(lp.Position);
@@ -177,9 +144,7 @@ public sealed unsafe partial class Plugin
                 this.worker = Task.Run(this.BuildLoop);
             }
 
-            var full = this.MeshTriangles >= MeshMaxTriangles ? ", at the triangle budget" : string.Empty;
-            this.MeshStatus = $"{this.entries.Count} objects, {this.toBuild.Count} to build, {this.MeshTriangles} triangles{full}";
-            this.MeshDetail = false;
+            this.MeshStatus = $"{this.entries.Count} objects, {this.toBuild.Count} to build, {this.triangles} triangles";
         }
         catch (Exception ex)
         {
@@ -203,13 +168,7 @@ public sealed unsafe partial class Plugin
         }
 
         var radius = this.Settings.MeshRadius;
-        var t0 = Stopwatch.GetTimestamp();
         this.stamp++;
-        this.MeshOrigin = origin;
-        this.nearby.Clear();
-        this.huge.Clear();
-        var parts = 0;
-        var inRange = 0;
         var key = InstanceType.BgPart;
         if (layout->InstancesByType.TryGetValuePointer(in key, out var inner) && inner != null && inner->Value != null)
         {
@@ -221,7 +180,6 @@ public sealed unsafe partial class Plugin
                     continue;
                 }
 
-                parts++;
                 var gfx = inst->GraphicsObject;
                 if (gfx == null || gfx->ModelResourceHandle == null)
                 {
@@ -229,44 +187,16 @@ public sealed unsafe partial class Plugin
                 }
 
                 Vector3 pos = gfx->Position;
-                var dist = Vector3.Distance(pos, origin);
                 var sphere = inst->BoundingSphereSize;
-                if (sphere > MeshMaxSphere)
-                {
-                    if (this.huge.Count < 8)
-                    {
-                        this.huge.Add($"{gfx->ModelResourceHandle->FileName.ToString()}  {dist:F1} m, sphere {sphere:F1}");
-                    }
-
-                    continue;
-                }
-
-                if (dist > radius + sphere)
+                if (sphere > MeshMaxSphere || Vector3.Distance(pos, origin) > radius + sphere)
                 {
                     continue;
                 }
 
-                var solid = inst->Collider != null;
-                var e = this.Track((nint)inst, pos, gfx->Rotation, gfx->Scale, solid, &gfx->ModelResourceHandle->FileName);
-                e.Parented = gfx->ParentObject != null;
-                if (solid)
-                {
-                    inRange++;
-                }
-
-                if (dist - sphere < MeshNearRange && this.nearby.Count < 16)
-                {
-                    var state = !e.Built ? "queued" : $"{e.Kept} triangles, {e.Dropped} dropped, centre {(e.MinX + e.MaxX) / 2:F1}, {(e.MinZ + e.MaxZ) / 2:F1}";
-                    this.nearby.Add((dist, $"{e.Path}  {dist:F1} m, sphere {sphere:F1}, {(solid ? "collider" : "NO collider")}, {state}"));
-                }
+                this.Track((nint)inst, pos, gfx->Rotation, gfx->Scale, inst->Collider != null, &gfx->ModelResourceHandle->FileName);
             }
         }
 
-        this.MeshParts = parts;
-        this.MeshWithCollider = inRange;
-        this.nearby.Sort((a, b) => a.Dist.CompareTo(b.Dist));
-
-        var plates = 0;
         foreach (var pair in layout->Terrains)
         {
             var manager = pair.Item2.Value;
@@ -289,79 +219,47 @@ public sealed unsafe partial class Plugin
                     continue;
                 }
 
-                var e = this.Track((nint)p, pos, Quaternion.Identity, Vector3.One, true, &p->ModelResourceHandle->FileName);
-                if (plates == 0)
-                {
-                    Vector3 centre = p->BoundsCenter;
-                    this.MeshPlateSample = $"{e.Path} translation {pos.X:F1}, {pos.Y:F1}, {pos.Z:F1} bounds centre {centre.X:F1}, {centre.Y:F1}, {centre.Z:F1} tile {p->TileWidth}";
-                }
-
-                plates++;
+                this.Track((nint)p, pos, Quaternion.Identity, Vector3.One, true, &p->ModelResourceHandle->FileName);
             }
         }
 
-        this.MeshPlates = plates;
         foreach (var (k, e) in this.entries)
         {
             if (e.Stamp != this.stamp)
             {
                 if (e.Built)
                 {
-                    this.MeshTriangles -= e.Kept;
+                    this.triangles -= e.Kept;
                 }
 
                 this.entries.Remove(k);
             }
         }
-
-        // Only while the tab that shows it is open: an unbounded band over every entry whose footprint contains you is
-        // real work, and with zone-sized footprints in the list that is most of them.
-        this.under.Clear();
-        if (this.MeshDetail)
-        {
-            foreach (var e in this.entries.Values)
-            {
-                if (!e.Built || origin.X < e.MinX || origin.X > e.MaxX || origin.Z < e.MinZ || origin.Z > e.MaxZ)
-                {
-                    continue;
-                }
-
-                var found = TryNearest(e, origin.X, origin.Z, origin.Y, float.MaxValue, float.MaxValue, out _, out var y);
-                var surface = found ? $"surface {y - origin.Y:+0.00;-0.00} m from your feet" : "no triangle under you";
-                this.under.Add((found ? MathF.Abs(y - origin.Y) : float.MaxValue, $"{e.Path}  {(e.Solid ? "collider" : "NO collider")}{(e.Parented ? ", parented" : string.Empty)}, {e.Kept} triangles, {e.Dropped} dropped, {surface}"));
-            }
-
-            this.under.Sort((a, b) => a.Dist.CompareTo(b.Dist));
-            if (this.under.Count > 16)
-            {
-                this.under.RemoveRange(16, this.under.Count - 16);
-            }
-        }
-
-        this.MeshScanMs = Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
     }
 
     // The address is the key and the allocator reuses addresses, so an entry whose placement moved is a different
     // object, or the same one carried somewhere: either way its world triangles are stale and it is built again.
-    private MeshEntry Track(nint key, Vector3 pos, Quaternion rot, Vector3 scale, bool solid, FFXIVClientStructs.STD.StdString* name)
+    private void Track(nint key, Vector3 pos, Quaternion rot, Vector3 scale, bool solid, FFXIVClientStructs.STD.StdString* name)
     {
         if (!this.entries.TryGetValue(key, out var e) || e.Pos != pos || e.Rot != rot || e.Scale != scale)
         {
+            if (e is { Built: true })
+            {
+                this.triangles -= e.Kept;
+            }
+
             e = new MeshEntry { Key = key, Path = name->ToString(), Pos = pos, Rot = rot, Scale = scale, Solid = solid };
             this.entries[key] = e;
         }
 
         e.Stamp = this.stamp;
 
-        // Over the budget the part is held as an empty stub and queued on a later scan instead, once what you have
-        // walked away from has freed the room. Queued only ever once, so the worker never rebuilds a live entry.
-        if (!e.Queued && this.MeshTriangles < MeshMaxTriangles)
+        // Queued only ever once, so the worker never rebuilds a live entry.
+        if (!e.Queued)
         {
             e.Queued = true;
             this.toBuild.Enqueue(e);
         }
-
-        return e;
     }
 
     // Main thread: an entry the worker finished becomes visible to the refine, unless it was dropped or replaced meanwhile.
@@ -372,7 +270,7 @@ public sealed unsafe partial class Plugin
             if (this.entries.TryGetValue(e.Key, out var current) && current == e)
             {
                 e.Built = true;
-                this.MeshTriangles += e.Kept;
+                this.triangles += e.Kept;
             }
         }
     }
@@ -391,7 +289,6 @@ public sealed unsafe partial class Plugin
                 this.models.Clear();
             }
 
-            var t0 = Stopwatch.GetTimestamp();
             try
             {
                 this.Build(e);
@@ -401,8 +298,6 @@ public sealed unsafe partial class Plugin
                 Log.Warning(ex, "FootIk: could not build {Path}", e.Path);
             }
 
-            this.MeshBuildMs = Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
-            this.MeshBuildMaxMs = Math.Max(this.MeshBuildMaxMs, this.MeshBuildMs);
             this.built.Enqueue(e);
         }
     }
@@ -443,7 +338,6 @@ public sealed unsafe partial class Plugin
             if (!float.IsFinite(minX + maxX + minZ + maxZ + a.Y + b.Y + c.Y) || maxX - minX > MeshMaxWide || maxZ - minZ > MeshMaxWide
                 || inserts >= MeshMaxInserts)
             {
-                e.Dropped++;
                 continue;
             }
 
@@ -552,11 +446,6 @@ public sealed unsafe partial class Plugin
             Log.Warning(ex, "FootIk: could not read {Path}", path);
         }
 
-        if (result == null)
-        {
-            Interlocked.Increment(ref this.meshFailed);
-        }
-
         this.models[path] = result;
         return result;
     }
@@ -581,7 +470,6 @@ public sealed unsafe partial class Plugin
     private void RefineByMesh(Vector3 origin, ref RaycastHit hit)
     {
         Vector3 p = hit.Point;
-        this.meshRays++;
         var band = this.Settings.MeshBand;
         var solid = new Candidate();
         var loose = new Candidate();
@@ -599,22 +487,13 @@ public sealed unsafe partial class Plugin
         var pick = loose.Dist < solid.Dist ? loose : solid;
         if (pick.Entry == null)
         {
-            this.MeshMissed++;
             return;
         }
 
         hit.V1 = pick.Entry.Tris[pick.Tri];
         hit.V2 = pick.Entry.Tris[pick.Tri + 1];
         hit.V3 = pick.Entry.Tris[pick.Tri + 2];
-        this.MeshLastPath = pick.Entry.Path;
-        this.MeshLastSolid = pick.Entry.Solid;
-        this.MeshLastUp = Vector3.Cross(hit.V2 - hit.V1, hit.V3 - hit.V1).Y > 0f;
-        this.MeshLastSpan = MathF.Max(
-            MathF.Max(hit.V1.X, MathF.Max(hit.V2.X, hit.V3.X)) - MathF.Min(hit.V1.X, MathF.Min(hit.V2.X, hit.V3.X)),
-            MathF.Max(hit.V1.Z, MathF.Max(hit.V2.Z, hit.V3.Z)) - MathF.Min(hit.V1.Z, MathF.Min(hit.V2.Z, hit.V3.Z)));
         hit.Point = new Vector3(p.X, pick.Y, p.Z);
         hit.Distance = origin.Y - pick.Y;
-        this.MeshRefined++;
-        this.MeshLastDelta = pick.Y - p.Y;
     }
 }

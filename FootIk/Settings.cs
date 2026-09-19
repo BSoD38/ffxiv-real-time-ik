@@ -25,7 +25,7 @@ public enum Who
 }
 
 // Fields ending in Frac are fractions of the bind-pose leg length, so races of every size behave alike.
-// Saved by Dalamud as JSON. These are fields rather than properties because ImGui takes each one by reference.
+// Saved by Dalamud as JSON, and reset field by field through reflection.
 public sealed class Settings : IPluginConfiguration
 {
     public int Version { get; set; } = 1;
@@ -107,26 +107,19 @@ public sealed class Settings : IPluginConfiguration
     public bool WorksIn(bool groupPose) => groupPose ? this.Where is Where.GroupPose or Where.Both : this.Where is Where.InGame or Where.Both;
 
     // Puts fields back to how they shipped; null resets every one of them.
-    public void Reset(string[]? fields = null)
-    {
-        var defaults = new Settings();
-        foreach (var field in typeof(Settings).GetFields(BindingFlags.Public | BindingFlags.Instance))
-        {
-            if (fields is null || Array.IndexOf(fields, field.Name) >= 0)
-            {
-                field.SetValue(this, field.GetValue(defaults));
-            }
-        }
-    }
+    public void Reset(string[]? fields = null) => this.Restore(f => fields is null || Array.IndexOf(fields, f.Name) >= 0);
 
     // A truncated or hand-edited file can deserialise a NaN, and every comparison against NaN is false, so the guards
-    // downstream let it through as "not too far". Reflection so a field added later is covered.
-    public void Repair()
+    // downstream let it through as "not too far".
+    public void Repair() => this.Restore(f => f.FieldType == typeof(float) && !float.IsFinite((float)f.GetValue(this)!));
+
+    // Reflection so a field added later is covered without being listed anywhere.
+    private void Restore(Func<FieldInfo, bool> wanted)
     {
         var defaults = new Settings();
         foreach (var field in typeof(Settings).GetFields(BindingFlags.Public | BindingFlags.Instance))
         {
-            if (field.FieldType == typeof(float) && !float.IsFinite((float)field.GetValue(this)!))
+            if (wanted(field))
             {
                 field.SetValue(this, field.GetValue(defaults));
             }

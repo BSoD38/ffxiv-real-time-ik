@@ -115,7 +115,7 @@ dotnet build FootIk/FootIk.csproj -c Release
 
 Dev-load `FootIk\bin\Release\FootIk.dll` via `/xlplugins`.
 
-**In-game verification loop:** build → `/xlplugins` dev-reload → `/ik` → the Feet / Ankles / Edges / Lean / Emotes / Performance / Status tabs. The `Enabled` dropdown is the A/B. Anything touching hooks, collision or bone writes **can only be verified in game** — say so explicitly rather than claiming verification from a green build.
+**In-game verification loop:** build → `/xlplugins` dev-reload → `/ik` → the Feet / Edges / Leaning / Shoving / Emotes / Performance / Status tabs. The `Enabled` dropdown is the A/B. Anything touching hooks, collision or bone writes **can only be verified in game** — say so explicitly rather than claiming verification from a green build.
 
 ## Workflow
 

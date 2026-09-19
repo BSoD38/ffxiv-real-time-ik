@@ -199,9 +199,11 @@ public sealed unsafe partial class Plugin
 
     private static Xf AsXf(in Transform t) => new() { T = t.Position, R = t.Rotation, S = t.Scale };
 
-    // Turns the whole model-space pose about the character origin. Face and hair partials were attached to body bones
-    // before this hook ran; a rigid turn about the origin moves an anchor and its partial the same way.
-    private static void RotateBody(Skeleton* skel, hkaPose* pose, Quaternion q)
+    // Turns the whole model-space pose about the character origin and then shifts it, in one walk. Face and hair
+    // partials were attached to body bones before this hook ran; a rigid move of the whole pose carries an anchor and
+    // its partial the same way. With the feet then solved back to where they stood, the shift is what bends the knees:
+    // the hips go and the legs must reach.
+    private static void MoveBody(Skeleton* skel, hkaPose* pose, Quaternion q, Vector3 by)
     {
         for (var p = 0; p < skel->PartialSkeletonCount; p++)
         {
@@ -218,45 +220,13 @@ public sealed unsafe partial class Plugin
 
             var pb = pp->ModelPose.Data;
             // Never n_root, bone 0 of the body: the game reads it back to see how far the animation has carried the
-            // character, so turning it moves the character and the camera re-anchors. Only the body's, though: bone 0 of
+            // character, so moving it moves the character and the camera re-anchors. Only the body's, though: bone 0 of
             // a face or hair partial fastens it to the head, and leaving it behind tears the head apart (seen in game).
             for (var k = p == 0 ? 1 : 0; k < pp->ModelPose.Length; k++)
             {
                 var x = Bones.Read(in pb[k]);
-                x.T = Vector3.Transform(x.T, q);
+                x.T = Vector3.Transform(x.T, q) + by;
                 x.R = Quaternion.Normalize(q * x.R);
-                if (x.IsFinite)
-                {
-                    Bones.Write(ref pb[k], in x);
-                }
-            }
-
-            pp->LocalInSync = 0;
-        }
-    }
-
-    // Shifts the whole model-space pose, n_root and the partials handled exactly as RotateBody handles them. With the
-    // feet then solved back to where they stood, this is what bends the knees: the hips go and the legs must reach.
-    private static void TranslateBody(Skeleton* skel, hkaPose* pose, Vector3 by)
-    {
-        for (var p = 0; p < skel->PartialSkeletonCount; p++)
-        {
-            var pp = p == 0 ? pose : skel->PartialSkeletons[p].GetHavokPose(0);
-            if (pp == null || pp->Skeleton == null || pp->ModelPose.Length != pp->Skeleton->Bones.Length)
-            {
-                continue;
-            }
-
-            if (pp->ModelInSync == 0)
-            {
-                pp->SyncModelSpace();
-            }
-
-            var pb = pp->ModelPose.Data;
-            for (var k = p == 0 ? 1 : 0; k < pp->ModelPose.Length; k++)
-            {
-                var x = Bones.Read(in pb[k]);
-                x.T += by;
                 if (x.IsFinite)
                 {
                     Bones.Write(ref pb[k], in x);

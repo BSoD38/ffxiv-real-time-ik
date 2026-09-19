@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using FFXIVClientStructs.FFXIV.Component.GUI;
@@ -32,59 +34,16 @@ internal sealed class Overlay : NativeAddon
     private const float LineHeight = 17f;
     private const long SaveDelayMs = 500;
 
-    // Longest diagnostic list the mesh section prints; beyond this the tail is dropped rather than grown, so the
-    // node count stays fixed for the life of the tab.
-    private const int MeshLines = 8;
-
-    private static readonly string[] TabNames = ["Feet", "Edges", "Leaning", "Shoving", "Emotes", "Performance", "Status"];
-
     // Asides and column headings, the native stand-in for ImGui's TextDisabled.
     private static readonly Vector4 Dim = new(0.62f, 0.62f, 0.62f, 1f);
-
-    // What each tab's reset button puts back; the Status tab has no entry and resets everything instead.
-    // nameof so renaming a setting breaks the build rather than leaving a button that quietly does nothing.
-    private static readonly string[][] TabFields =
-    [
-        [
-            nameof(Settings.Where), nameof(Settings.KeepFeetOutOfWalls), nameof(Settings.MaxRaiseFrac), nameof(Settings.MaxKneeBendDeg),
-            nameof(Settings.StraightenLimit), nameof(Settings.MaxAnkleAngleDeg), nameof(Settings.TiltFadeFrac), nameof(Settings.MaxDropFrac),
-            nameof(Settings.MaxPelvisRaiseFrac), nameof(Settings.MaxStepDownFrac), nameof(Settings.BlendSeconds), nameof(Settings.PelvisTau),
-            nameof(Settings.WallClearanceFrac), nameof(Settings.MaxStepFrac), nameof(Settings.LiftThresholdFrac), nameof(Settings.RayUpFrac),
-            nameof(Settings.RayDownFrac), nameof(Settings.RestAdjustFrac), nameof(Settings.SlopeLiftFrac),
-        ],
-        [
-            nameof(Settings.GatherFeet), nameof(Settings.GatherToPosition), nameof(Settings.MinStanceFrac), nameof(Settings.GatherStraighten),
-            nameof(Settings.GatherForward), nameof(Settings.GatherPrecision), nameof(Settings.GatherTauIn), nameof(Settings.GatherTauOut),
-            nameof(Settings.MaxStanceFrac), nameof(Settings.MaxBodyShiftFrac),
-        ],
-        [
-            nameof(Settings.SlopeLean), nameof(Settings.LeanUphillGain), nameof(Settings.LeanDownhillGain), nameof(Settings.MaxLeanDeg),
-            nameof(Settings.MoveWeapons), nameof(Settings.MaxTotalPitchDeg), nameof(Settings.MinTotalPitchDeg), nameof(Settings.LeanTau),
-        ],
-        [
-            nameof(Settings.Bump), nameof(Settings.Shoved), nameof(Settings.BumpNpcs), nameof(Settings.Grunt), nameof(Settings.BumpCooldown),
-            nameof(Settings.BumpSameCooldown), nameof(Settings.BumpRadiusFrac), nameof(Settings.BumpMaxDeg), nameof(Settings.BumpShoveFrac),
-            nameof(Settings.BumpHeadHold), nameof(Settings.BumpBodyTurn), nameof(Settings.BumpMinSpeed), nameof(Settings.BumpRiseSeconds),
-            nameof(Settings.BumpTau),
-        ],
-        [
-            nameof(Settings.Emotes), nameof(Settings.FloorTilt), nameof(Settings.MaxSitTiltDeg), nameof(Settings.SitTiltTau),
-        ],
-        [
-            nameof(Settings.Others), nameof(Settings.MaxOthers), nameof(Settings.OthersRadius), nameof(Settings.Who),
-            nameof(Settings.OthersGatherPrecision), nameof(Settings.MeshRefine), nameof(Settings.MeshRadius), nameof(Settings.MeshBand),
-        ],
-    ];
 
     public required Plugin Owner { get; init; }
 
     // Rebuilt with the active tab: a text node that restates a value, and a widget that is greyed out while
-    // the setting above it is off. `shown` is the text each node already carries, so an unchanged line is not
-    // written into the game's node every frame.
-    private readonly List<(TextNode Node, Func<string> Text)> live = [];
-    private readonly List<string> shown = [];
-    private readonly List<(Func<bool> On, Action<bool> Set)> gates = [];
-    private readonly List<bool?> applied = [];
+    // the setting above it is off. `Shown` is the text each node already carries, so an unchanged line is not
+    // written into the game's node every frame; `Applied` is the same for a gate.
+    private readonly List<(TextNode Node, Func<string> Text, string Shown)> live = [];
+    private readonly List<(Func<bool> On, Action<bool> Set, bool? Applied)> gates = [];
 
     // A slider component owns its value node: it puts its own raw step count back into it on every update, so the
     // count cannot be hidden. It is overwritten instead, unconditionally rather than only when the string changes,
@@ -94,6 +53,7 @@ internal sealed class Overlay : NativeAddon
     // Which folds the user has opened, keyed by tab so that "Advanced" on one tab is not "Advanced" on another.
     private readonly HashSet<string> unfolded = [];
 
+    private (string Name, Func<List<NodeBase>> Build, string[]? Fields)[]? tabs;
     private ScrollingNode<VerticalListNode>? scroll;
     private TextButtonNode? resetButton;
     private ConfirmWindow? confirm;
@@ -105,6 +65,49 @@ internal sealed class Overlay : NativeAddon
     private long dirtyAt;
     private float rawPeak;
     private float lostPeak;
+
+    // One row per tab: its name on the bar, what builds it, and what its reset button puts back. The Status tab has no
+    // field list and resets everything instead. nameof so renaming a setting breaks the build rather than leaving a
+    // button that quietly does nothing. A property rather than a field because the builders are instance methods.
+    private (string Name, Func<List<NodeBase>> Build, string[]? Fields)[] Tabs => this.tabs ??=
+    [
+        ("Feet", this.BuildFeet,
+        [
+            nameof(Settings.Where), nameof(Settings.KeepFeetOutOfWalls), nameof(Settings.MaxRaiseFrac), nameof(Settings.MaxKneeBendDeg),
+            nameof(Settings.StraightenLimit), nameof(Settings.MaxAnkleAngleDeg), nameof(Settings.TiltFadeFrac), nameof(Settings.MaxDropFrac),
+            nameof(Settings.MaxPelvisRaiseFrac), nameof(Settings.MaxStepDownFrac), nameof(Settings.BlendSeconds), nameof(Settings.PelvisTau),
+            nameof(Settings.WallClearanceFrac), nameof(Settings.MaxStepFrac), nameof(Settings.LiftThresholdFrac), nameof(Settings.RayUpFrac),
+            nameof(Settings.RayDownFrac), nameof(Settings.RestAdjustFrac), nameof(Settings.SlopeLiftFrac),
+        ]),
+        ("Edges", this.BuildEdges,
+        [
+            nameof(Settings.GatherFeet), nameof(Settings.GatherToPosition), nameof(Settings.MinStanceFrac), nameof(Settings.GatherStraighten),
+            nameof(Settings.GatherForward), nameof(Settings.GatherPrecision), nameof(Settings.GatherTauIn), nameof(Settings.GatherTauOut),
+            nameof(Settings.MaxStanceFrac), nameof(Settings.MaxBodyShiftFrac),
+        ]),
+        ("Leaning", this.BuildLean,
+        [
+            nameof(Settings.SlopeLean), nameof(Settings.LeanUphillGain), nameof(Settings.LeanDownhillGain), nameof(Settings.MaxLeanDeg),
+            nameof(Settings.MoveWeapons), nameof(Settings.MaxTotalPitchDeg), nameof(Settings.MinTotalPitchDeg), nameof(Settings.LeanTau),
+        ]),
+        ("Shoving", this.BuildShoving,
+        [
+            nameof(Settings.Bump), nameof(Settings.Shoved), nameof(Settings.BumpNpcs), nameof(Settings.Grunt), nameof(Settings.BumpCooldown),
+            nameof(Settings.BumpSameCooldown), nameof(Settings.BumpRadiusFrac), nameof(Settings.BumpMaxDeg), nameof(Settings.BumpShoveFrac),
+            nameof(Settings.BumpHeadHold), nameof(Settings.BumpBodyTurn), nameof(Settings.BumpMinSpeed), nameof(Settings.BumpRiseSeconds),
+            nameof(Settings.BumpTau),
+        ]),
+        ("Emotes", this.BuildEmotes,
+        [
+            nameof(Settings.Emotes), nameof(Settings.FloorTilt), nameof(Settings.MaxSitTiltDeg), nameof(Settings.SitTiltTau),
+        ]),
+        ("Performance", this.BuildPerformance,
+        [
+            nameof(Settings.Others), nameof(Settings.MaxOthers), nameof(Settings.OthersRadius), nameof(Settings.Who),
+            nameof(Settings.OthersGatherPrecision), nameof(Settings.MeshRefine), nameof(Settings.MeshRadius), nameof(Settings.MeshBand),
+        ]),
+        ("Status", this.BuildStatus, null),
+    ];
 
     protected override unsafe void OnSetup(AtkUnitBase* addon, Span<AtkValue> atkValueSpan)
     {
@@ -118,14 +121,14 @@ internal sealed class Overlay : NativeAddon
             Size = new Vector2(this.ContentSize.X - ResetWidth - Gap, BarHeight),
         };
 
-        for (var i = 0; i < TabNames.Length; i++)
+        for (var i = 0; i < this.Tabs.Length; i++)
         {
             var index = i;
-            bar.AddTab(TabNames[i], () => this.ShowTab(index));
+            bar.AddTab(this.Tabs[i].Name, () => this.ShowTab(index));
         }
 
         // The bar lights its first tab on its own; a window reopened on another tab has to be told.
-        bar.SelectTab(TabNames[this.tab]);
+        bar.SelectTab(this.Tabs[this.tab].Name);
         bar.AttachNode(this);
 
         this.resetButton = new TextButtonNode
@@ -206,9 +209,7 @@ internal sealed class Overlay : NativeAddon
         this.Flush();
         this.setup = false;
         this.live.Clear();
-        this.shown.Clear();
         this.gates.Clear();
-        this.applied.Clear();
         this.forced.Clear();
         this.scroll = null;
         this.resetButton = null;
@@ -216,9 +217,13 @@ internal sealed class Overlay : NativeAddon
 
     // KamiToolKit loads its textures before any game node can exist, so the window is built from here rather than
     // from the plugin's constructor.
-    internal static async Task InstallAsync(Plugin owner)
+    internal static async Task InstallAsync(Plugin owner, CancellationToken token)
     {
         await KamiToolKitLibrary.InitializeAsync(Plugin.PluginInterface, "Inverse Kinematics");
+
+        // An unload asked for during the load has already taken the handlers off by the time we get here, and
+        // registering them again would leave a command and a draw hook behind a plugin that is on its way out.
+        token.ThrowIfCancellationRequested();
 
         owner.AttachWindow(new Overlay
         {
@@ -233,7 +238,16 @@ internal sealed class Overlay : NativeAddon
     // and our own offsets have to be put back from a call marshalled onto it.
     internal static async ValueTask ShutdownAsync(Plugin owner, Overlay? window)
     {
-        await Plugin.Framework.RunOnFrameworkThread(owner.Teardown);
+        try
+        {
+            await Plugin.Framework.RunOnFrameworkThread(owner.Teardown);
+        }
+        catch (Exception ex)
+        {
+            // Whatever the hooks and the offsets did, the window still has to come down: native nodes left attached
+            // outlive the plugin that owns them.
+            Plugin.Log.Error(ex, "FootIk: teardown failed");
+        }
 
         // That await resumes on the framework thread, and NativeAddon.CloseAsync refuses to run there: it waits out
         // the window's closing animation, which needs frames to pass, so waiting from the thread that draws them
@@ -276,37 +290,36 @@ internal sealed class Overlay : NativeAddon
     private void Refresh()
     {
         var resized = false;
-        for (var i = 0; i < this.live.Count; i++)
+        foreach (ref var line in CollectionsMarshal.AsSpan(this.live))
         {
-            var text = this.live[i].Text();
-            if (text == this.shown[i])
+            var text = line.Text();
+            if (text == line.Shown)
             {
                 continue;
             }
 
-            this.shown[i] = text;
-            var node = this.live[i].Node;
-            node.String = text;
+            line.Shown = text;
+            line.Node.String = text;
 
             // Visibility is left alone here, whatever the line says. A collapsing header hides its contents by
             // turning them off one by one, so a readout inside a collapsed fold that showed itself again on the
             // strength of having text would come back without the fold it belongs to, and the list would be
             // re-flowed around a widget nobody can see. An empty line holds a blank row open instead.
-            resized |= Fit(node);
+            resized |= Fit(line.Node);
         }
 
         // A gate that has not moved is left alone: some of them hide a widget outright, and the list around it has
         // to be re-flowed when they do.
-        for (var i = 0; i < this.gates.Count; i++)
+        foreach (ref var gate in CollectionsMarshal.AsSpan(this.gates))
         {
-            var on = this.gates[i].On();
-            if (this.applied[i] == on)
+            var on = gate.On();
+            if (gate.Applied == on)
             {
                 continue;
             }
 
-            this.applied[i] = on;
-            this.gates[i].Set(on);
+            gate.Applied = on;
+            gate.Set(on);
             resized = true;
         }
 
@@ -340,24 +353,24 @@ internal sealed class Overlay : NativeAddon
 
     private TextNode Watch(TextNode node, Func<string> text)
     {
-        this.live.Add((node, text));
-        this.shown.Add(string.Empty);
+        this.live.Add((node, text, string.Empty));
         return node;
     }
 
-    private void Gate(Func<bool> on, Action<bool> set)
-    {
-        this.gates.Add((on, set));
-        this.applied.Add(null);
-    }
+    private void Gate(Func<bool> on, Action<bool> set) => this.gates.Add((on, set, null));
 
+    // The reset window outlives this one and can be confirmed after it has been closed, so a rebuild has to be
+    // refused while the tree is down: the nodes are already gone between the hide and the finalise.
     private void ShowTab(int index)
     {
+        if (!this.setup)
+        {
+            return;
+        }
+
         this.tab = index;
         this.live.Clear();
-        this.shown.Clear();
         this.gates.Clear();
-        this.applied.Clear();
         this.forced.Clear();
 
         if (this.scroll is null)
@@ -366,16 +379,7 @@ internal sealed class Overlay : NativeAddon
         }
 
         this.scroll.ContentNode.Clear();
-        this.scroll.ContentNode.AddNode(index switch
-        {
-            0 => this.BuildFeet(),
-            1 => this.BuildEdges(),
-            2 => this.BuildLean(),
-            3 => this.BuildShoving(),
-            4 => this.BuildEmotes(),
-            5 => this.BuildPerformance(),
-            _ => this.BuildStatus(),
-        });
+        this.scroll.ContentNode.AddNode(this.Tabs[index].Build());
 
         // Text before layout, everywhere: a node's height follows the string it carries.
         this.Refresh();
@@ -384,7 +388,7 @@ internal sealed class Overlay : NativeAddon
 
         if (this.resetButton is not null)
         {
-            this.resetButton.String = index >= TabFields.Length ? "Reset all" : "Reset tab";
+            this.resetButton.String = this.Tabs[index].Fields is null ? "Reset all" : "Reset tab";
         }
     }
 
@@ -404,8 +408,11 @@ internal sealed class Overlay : NativeAddon
 
     private void AskReset()
     {
-        var global = this.tab >= TabFields.Length;
-        var fields = global ? null : TabFields[this.tab];
+        // Both taken now: the window stays usable while the question is up, so the tab may have moved on by the
+        // time it is answered, and the answer belongs to the tab that asked.
+        var index = this.tab;
+        var fields = this.Tabs[index].Fields;
+        var global = fields is null;
 
         this.confirm ??= new ConfirmWindow
         {
@@ -422,7 +429,7 @@ internal sealed class Overlay : NativeAddon
         {
             this.Owner.Settings.Reset(fields);
             this.Owner.SaveSettings();
-            this.ShowTab(this.tab);
+            this.ShowTab(index);
         };
 
         this.confirm.Open();
@@ -533,6 +540,10 @@ internal sealed class Overlay : NativeAddon
             set(value);
             this.Touch();
         };
+
+        // A setting can be turned off behind the window's back — the mesh scan does it to itself when it faults —
+        // and a tick left standing would say otherwise.
+        this.Gate(get, on => box.IsChecked = on);
 
         if (enabled is not null)
         {
@@ -871,6 +882,8 @@ internal sealed class Overlay : NativeAddon
                 this.Slide("Max difference", () => c.MeshBand, v => c.MeshBand = v, 0.05f, 1f, 100f, v => $"{v:F2} m",
                     "How far the visible ground may be from the simple shape and still be believed. Too low and stairs are missed; too high and a foot may land on furniture.", () => c.MeshRefine),
             ]),
+            // The scan switches its own setting off when it faults, so the reason it did has to be somewhere.
+            this.Readout(() => p.MeshStatus == "off" ? string.Empty : $"Higher precision collision: {p.MeshStatus}"),
             this.Readout(() => $"Working on {p.Tracked} character{(p.Tracked == 1 ? string.Empty : "s")}."),
             this.Readout(() => $"Frame cost {p.LastMicros:F0} us, max {p.MaxMicros:F0} us."),
         ];
@@ -914,7 +927,6 @@ internal sealed class Overlay : NativeAddon
             this.Columns("tilt", () => $"{p.Snap.Left.TiltDeg:F0} deg", () => $"{p.Snap.Right.TiltDeg:F0} deg"),
             this.Columns("moved", () => Cm((p.Snap.Left.GatherShift + p.Snap.Left.WallShift).Length()), () => Cm((p.Snap.Right.GatherShift + p.Snap.Right.WallShift).Length())),
             this.Fold("Details", this.BuildDetails),
-            this.Fold("Higher precision collision", this.BuildMesh),
         ];
     }
 
@@ -984,52 +996,7 @@ internal sealed class Overlay : NativeAddon
         ];
     }
 
-    private List<NodeBase> BuildMesh()
-    {
-        var p = this.Owner;
-        var c = p.Settings;
-
-        // The mesh pass only keeps its per-part readouts while something is looking at them.
-        this.Gate(() => c.MeshRefine, on => p.MeshDetail = on);
-
-        var nodes = new List<NodeBase>
-        {
-            this.Readout(() => c.MeshRefine ? p.MeshStatus : "Off. Turn it on from the Performance tab."),
-            this.Readout(() => !c.MeshRefine ? string.Empty : $"Parts {p.MeshParts}, with collider in range {p.MeshWithCollider}, terrain plates {p.MeshPlates}, unreadable {p.MeshFailed}"),
-            this.Readout(() => !c.MeshRefine ? string.Empty : $"Scan {p.MeshScanMs:F1} ms   build (worker) {p.MeshBuildMs:F1} ms, max {p.MeshBuildMaxMs:F1}"),
-            this.Readout(() => !c.MeshRefine ? string.Empty : $"Refined {p.MeshRefined}   missed {p.MeshMissed}   last delta {p.MeshLastDelta:+0.000;-0.000} m"),
-            this.Readout(() => !c.MeshRefine ? string.Empty : $"Last refined by {p.MeshLastPath}  ({(p.MeshLastSolid ? "collider" : "NO collider")}, triangle {p.MeshLastSpan:F0} m wide, facing {(p.MeshLastUp ? "up" : "down")})"),
-            this.Readout(() => !c.MeshRefine ? string.Empty : $"Rays this frame {p.MeshRaysPerFrame} over {p.MeshObjects} objects = {p.MeshRaysPerFrame * p.MeshObjects} bounds tests"),
-            this.Readout(() => !c.MeshRefine ? string.Empty : $"Terrain plate: {p.MeshPlateSample}"),
-            this.Note("Parts whose footprint contains you, nearest surface first, and what they hold under you."),
-        };
-
-        for (var i = 0; i < MeshLines; i++)
-        {
-            var index = i;
-            nodes.Add(this.Readout(() => Line(p.MeshUnder, index)));
-        }
-
-        nodes.Add(this.Note($"Never read: bounding sphere over {Plugin.MeshMaxSphere:F0} m."));
-        for (var i = 0; i < MeshLines / 2; i++)
-        {
-            var index = i;
-            nodes.Add(this.Readout(() => index < p.MeshHuge.Count ? p.MeshHuge[index] : string.Empty));
-        }
-
-        nodes.Add(this.Readout(() => $"Parts within 6 m of you ({p.MeshOrigin.X:F1}, {p.MeshOrigin.Z:F1}). A centre far from the part you stand on means its placement is not world-space."));
-        for (var i = 0; i < MeshLines; i++)
-        {
-            var index = i;
-            nodes.Add(this.Readout(() => Line(p.MeshNearby, index)));
-        }
-
-        return nodes;
-    }
-
     private string Metres(float fraction, int digits = 2) => (fraction * this.Owner.Snap.LegLength).ToString($"F{digits}");
-
-    private static string Line(IReadOnlyList<(float Dist, string Line)> lines, int index) => index < lines.Count ? lines[index].Line : string.Empty;
 
     private static bool Hooked(Plugin p) =>
         p.HookStatus.StartsWith("hooked", StringComparison.Ordinal) && p.MoveHookStatus.StartsWith("hooked", StringComparison.Ordinal) && p.SelfTest == "PASS";
