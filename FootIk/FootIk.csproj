@@ -22,6 +22,7 @@
        build, which runs straight out of the output folder. -->
   <ItemGroup>
     <Content Include="images\icon.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="sounds\shove.scd" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- DalamudPackager deliberately keeps images\ out of the zip, staging it beside the manifest for the repository

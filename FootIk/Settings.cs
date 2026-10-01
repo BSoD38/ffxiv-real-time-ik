@@ -31,10 +31,16 @@ public sealed class Settings : IPluginConfiguration
     public int Version { get; set; } = 1;
 
     public Where Where = Where.InGame; // group pose off by default: posing tools move the same bones
+    public bool OpenWorld = true;
+    public bool Duties = true;
+    public bool WeaponDrawn = true;
+    public bool Cutscenes;
     public bool ShowMarkers;
     public bool ShowRuler;
     public float BlendSeconds = 0.15f;
     public float PelvisTau = 0.08f;
+    public float StrideTau = 0.25f; // body smoothing at a run, where it follows the ground under itself; 0 keeps the standing rule at every speed
+    public float FootTau = 0.03f; // also sets how far ahead a moving foot looks for a step; 0 turns both off
 
     public float MaxDropFrac = 0.40f;
     public float MaxRaiseFrac = 0.35f;
@@ -79,6 +85,8 @@ public sealed class Settings : IPluginConfiguration
     public bool Shoved = true;           // someone running into you counts, not only you running into them
     public bool BumpNpcs;                // townspeople count as people to bump into
     public bool Grunt;                   // both bodies play their own damage-taken voice line on a bump
+    public bool ShoveSound;              // a thud at the point of contact, from sounds/shove.scd; needs Penumbra
+    public float ShoveVolume = 1f;
     public float BumpRadiusFrac = 0.45f; // half the centre distance at which two bodies touch, in leg lengths
     public float BumpMinSpeed = 5f;      // m/s closing on them, a world speed like StillSpeed
     public float BumpMaxDeg = 25f;
@@ -105,6 +113,10 @@ public sealed class Settings : IPluginConfiguration
     public float MeshBand = 0.35f; // metres the visible ground may differ from collision and still be believed: about a tall stair tread, a property of the level rather than the character
 
     public bool WorksIn(bool groupPose) => groupPose ? this.Where is Where.GroupPose or Where.Both : this.Where is Where.InGame or Where.Both;
+
+    // Every context the character is in has to be ticked.
+    public bool WorksHere(bool duty, bool weaponDrawn, bool cutscene) =>
+        (duty ? this.Duties : this.OpenWorld) && (this.WeaponDrawn || !weaponDrawn) && (this.Cutscenes || !cutscene);
 
     // Puts fields back to how they shipped; null resets every one of them.
     public void Reset(string[]? fields = null) => this.Restore(f => fields is null || Array.IndexOf(fields, f.Name) >= 0);

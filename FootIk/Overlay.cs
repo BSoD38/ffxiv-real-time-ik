@@ -5,11 +5,13 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Game.Text.SeStringHandling;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using KamiToolKit;
 using KamiToolKit.BaseTypes;
 using KamiToolKit.Classes;
 using KamiToolKit.Nodes;
+using Lumina.Text.ReadOnly;
 
 namespace FootIk;
 
@@ -73,10 +75,11 @@ internal sealed class Overlay : NativeAddon
     [
         ("Feet", this.BuildFeet,
         [
-            nameof(Settings.Where), nameof(Settings.KeepFeetOutOfWalls), nameof(Settings.MaxRaiseFrac), nameof(Settings.MaxKneeBendDeg),
+            nameof(Settings.Where), nameof(Settings.OpenWorld), nameof(Settings.Duties), nameof(Settings.WeaponDrawn), nameof(Settings.Cutscenes),
+            nameof(Settings.KeepFeetOutOfWalls), nameof(Settings.MaxRaiseFrac), nameof(Settings.MaxKneeBendDeg),
             nameof(Settings.StraightenLimit), nameof(Settings.MaxAnkleAngleDeg), nameof(Settings.TiltFadeFrac), nameof(Settings.MaxDropFrac),
             nameof(Settings.MaxPelvisRaiseFrac), nameof(Settings.MaxStepDownFrac), nameof(Settings.BlendSeconds), nameof(Settings.PelvisTau),
-            nameof(Settings.WallClearanceFrac), nameof(Settings.MaxStepFrac), nameof(Settings.LiftThresholdFrac), nameof(Settings.RayUpFrac),
+            nameof(Settings.StrideTau), nameof(Settings.FootTau), nameof(Settings.WallClearanceFrac), nameof(Settings.MaxStepFrac), nameof(Settings.LiftThresholdFrac), nameof(Settings.RayUpFrac),
             nameof(Settings.RayDownFrac), nameof(Settings.RestAdjustFrac), nameof(Settings.SlopeLiftFrac),
         ]),
         ("Edges", this.BuildEdges,
@@ -92,7 +95,8 @@ internal sealed class Overlay : NativeAddon
         ]),
         ("Shoving", this.BuildShoving,
         [
-            nameof(Settings.Bump), nameof(Settings.Shoved), nameof(Settings.BumpNpcs), nameof(Settings.Grunt), nameof(Settings.BumpCooldown),
+            nameof(Settings.Bump), nameof(Settings.Shoved), nameof(Settings.BumpNpcs), nameof(Settings.Grunt), nameof(Settings.ShoveSound),
+            nameof(Settings.ShoveVolume), nameof(Settings.BumpCooldown),
             nameof(Settings.BumpSameCooldown), nameof(Settings.BumpRadiusFrac), nameof(Settings.BumpMaxDeg), nameof(Settings.BumpShoveFrac),
             nameof(Settings.BumpHeadHold), nameof(Settings.BumpBodyTurn), nameof(Settings.BumpMinSpeed), nameof(Settings.BumpRiseSeconds),
             nameof(Settings.BumpTau),
@@ -524,7 +528,7 @@ internal sealed class Overlay : NativeAddon
         return header;
     }
 
-    private NodeBase Check(string label, Func<bool> get, Action<bool> set, string help, Func<bool>? enabled = null)
+    private NodeBase Check(ReadOnlySeString label, Func<bool> get, Action<bool> set, string help, Func<bool>? enabled = null)
     {
         var box = new CheckboxNode
         {
@@ -683,12 +687,23 @@ internal sealed class Overlay : NativeAddon
     private List<NodeBase> BuildFeet()
     {
         var c = this.Owner.Settings;
+        Func<bool> inGame = () => c.WorksIn(false);
         return
         [
             this.Pick("Enabled", () => c.Where, v => c.Where = v,
                 "Where the plugin places feet. Group pose is off by default: posing tools such as Brio and Ktisis move the same bones, and the two will fight over them."),
             this.Check("Keep feet out of walls", () => c.KeepFeetOutOfWalls, v => c.KeepFeetOutOfWalls = v,
                 "Stops the feet from clipping into walls, kerbs and steps by moving them slightly aside. Works best when feet gathering is enabled."),
+            this.Section("Active in"),
+            this.Check("Open world and cities", () => c.OpenWorld, v => c.OpenWorld = v,
+                "Anywhere outside a duty: open areas, cities and housing.", inGame),
+            this.Check("Duties", () => c.Duties, v => c.Duties = v,
+                "Dungeons, trials, raids and other instanced content.", inGame),
+            this.Check("Weapon drawn", () => c.WeaponDrawn, v => c.WeaponDrawn = v,
+                "While the weapon is out. Other characters follow their own weapon.", inGame),
+            this.Check(new Lumina.Text.SeStringBuilder().AppendIcon((uint)BitmapFontIcon.Warning).Append(" Cutscenes").ToReadOnlySeString(),
+                () => c.Cutscenes, v => c.Cutscenes = v,
+                "Experimental and may cause problems: the plugin was not made for how cutscenes stage characters, so feet and bodies may end up in the wrong place.", inGame),
             this.Fold("Advanced", () =>
             [
                 this.Section("Feet/leg placement settings"),
@@ -713,6 +728,10 @@ internal sealed class Overlay : NativeAddon
                     "Fade time when the effect turns on or off, such as mounting or entering a cutscene."),
                 this.Slide("Drop smoothing", () => c.PelvisTau, v => c.PelvisTau = v, 0.01f, 0.5f, 100f, v => $"{v:F2} s",
                     "Smoothing on the body height. Higher values will be smoother but might react late to floor height changes."),
+                this.Slide("Running smoothing", () => c.StrideTau, v => c.StrideTau = v, 0f, 0.6f, 100f, v => $"{v:F2} s",
+                    "How smoothly the body moves up and down while running, for example on stairs. Too low and the body lurches with every step. Too high and a foot may hover a moment as it lands. Zero makes the body follow the feet at every speed, as it does when standing."),
+                this.Slide("Foot smoothing", () => c.FootTau, v => c.FootTau = v, 0f, 0.15f, 100f, v => $"{v:F2} s",
+                    "Smoothing on each foot's height as it moves onto a new stair step or ledge. A moving foot starts rising early for a step ahead of it. Too low and the feet jump from step to step. Too high and the feet lift early for steps and hover a moment after stepping down. Zero turns it off."),
                 this.Section("Keep feet out of walls"),
                 this.Slide("Foot width", () => c.WallClearanceFrac, v => c.WallClearanceFrac = v, 0f, 0.2f, 100f, v => $"{v:F2}  ({this.Metres(v * 2f)} m wide)",
                     "How wide the feet are considered to be when avoiding walls. Increase if the feet still clip into walls. Decrease if they stay too far away from them.",
@@ -811,6 +830,10 @@ internal sealed class Overlay : NativeAddon
             this.Note("They flinch back only when \"Other players\" or \"Everyone\" is set in the performance settings."),
             this.Check("Grunt when shoved", () => c.Grunt, v => c.Grunt = v,
                 "Make both characters grunt when they one or the other is shoved. Has a random chance of playing a grunt.", () => c.Bump),
+            this.Check("Impact sound", () => c.ShoveSound, v => c.ShoveSound = v,
+                "Plays a soft thud where the two of you collide. Needs Penumbra installed; without it the bump stays silent.", () => c.Bump),
+            this.Slide("Impact volume", () => c.ShoveVolume, v => c.ShoveVolume = v, 0f, 1f, 100f, v => $"{v * 100f:F0}%",
+                "How loud the thud is. The game's Sound Effects volume applies on top.", () => c.Bump && c.ShoveSound),
             this.Section("Cooldowns"),
             this.Slide("Bump cooldown", () => c.BumpCooldown, v => c.BumpCooldown = v, 0f, 3f, 10f, v => $"{v:F1} s",
                 "The least time between two bumps, whoever they are with. Raise it if a crowd keeps your character flinching.", () => c.Bump),
@@ -916,9 +939,10 @@ internal sealed class Overlay : NativeAddon
             this.Check("Show markers in the world", () => c.ShowMarkers, v => c.ShowMarkers = v, "Draws a dot at each ankle and the ground under it."),
             this.Check("Show a one-metre ruler at your feet", () => c.ShowRuler, v => c.ShowRuler = v, "Draws a metre along the ground and a metre up, ticked every ten centimetres."),
             this.Section("Your character"),
-            this.Readout(() => Activity(in p.Snap, c.Where)),
+            this.Readout(() => Activity(in p.Snap, c)),
             this.Readout(() => $"Moving at {p.Snap.Speed:F1} m/s"),
             this.Readout(() => $"Body height {Cm(p.Snap.Applied)}   lean {p.Snap.LeanDeg:F0} deg   bump {p.Snap.BumpDeg:F0} deg   tilt to the ground {p.Snap.SitTiltDeg:F0} deg"),
+            this.Readout(() => $"Last bumped into: {p.LastBump ?? "nobody yet"}"),
             this.Section("Feet"),
             this.ColumnHeads(),
             this.Columns("standing", () => State(in p.Snap.Left), () => State(in p.Snap.Right)),
@@ -954,6 +978,7 @@ internal sealed class Overlay : NativeAddon
             this.Readout(() => $"Faults: {p.Faults}  {(p.Tripped ? "TRIPPED" : "armed")}"),
             this.Readout(() => $"Gate {p.Snap.Gate}   blend {p.Snap.Blend:F2}   speed {p.Snap.Speed:F2} m/s"),
             this.Readout(() => $"Mode {p.Snap.Mode} ({p.Snap.ModeParam})   jumping {p.Snap.IsJumping}   gpose {p.Snap.GPose}   blocking condition {p.Snap.Conditions}"),
+            this.Readout(() => $"In a duty {p.Snap.InDuty}   cutscene {p.Snap.InCutscene}   weapon drawn {p.Snap.WeaponDrawn}   off here {p.Snap.OffHere}"),
             // Peaks decay slowly so a value that only exists for a frame or two while walking can still be read off.
             this.Readout(() =>
             {
@@ -1001,8 +1026,9 @@ internal sealed class Overlay : NativeAddon
     private static bool Hooked(Plugin p) =>
         p.HookStatus.StartsWith("hooked", StringComparison.Ordinal) && p.MoveHookStatus.StartsWith("hooked", StringComparison.Ordinal) && p.SelfTest == "PASS";
 
-    private static string Activity(in Snapshot s, Where where)
+    private static string Activity(in Snapshot s, Settings c)
     {
+        var where = c.Where;
         if (where == Where.Off)
         {
             return "Switched off.";
@@ -1025,7 +1051,14 @@ internal sealed class Overlay : NativeAddon
 
         if (s.Conditions)
         {
-            return "Paused: mounted, swimming, flying, in a cutscene or loading.";
+            return "Paused: mounted, swimming, flying or loading.";
+        }
+
+        if (s.OffHere)
+        {
+            return s.InCutscene && !c.Cutscenes ? "Off in cutscenes."
+                : s.WeaponDrawn && !c.WeaponDrawn ? "Off with the weapon drawn."
+                : s.InDuty ? "Off in duties." : "Off outside duties.";
         }
 
         if (s.IsJumping)

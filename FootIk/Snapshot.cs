@@ -51,6 +51,10 @@ public struct Snapshot
     public bool IsJumping;
     public bool Conditions;
     public bool GPose;
+    public bool InDuty;
+    public bool InCutscene;
+    public bool WeaponDrawn;
+    public bool OffHere; // a context the character is in is unticked in the settings
     public CharacterModes Mode;
     public byte ModeParam;
     public float Blend;

@@ -233,8 +233,14 @@ public sealed unsafe partial class Plugin
 
     // Up or down a stair or a slope, the ground half a leg ahead of the character and half a leg behind differ by more
     // than a tread. Along a rail or a curb they match, whether both land on the rail or both on the deck below it.
-    private bool OnIncline(in Frame f)
+    private bool OnIncline(in Frame f) => this.Incline(in f, out var slope) && MathF.Abs(slope) * f.LegLen > f.StepTol;
+
+    // Rise per unit run between the ground half a leg ahead of the character and half a leg behind, along travel or
+    // facing. Collision only: a staircase is a ramp there, which is its incline, where the render mesh gives the flat
+    // tread under each probe.
+    private bool Incline(in Frame f, out float slope)
     {
+        slope = 0f;
         var dir = f.VelDir == Vector3.Zero ? Vector3.Transform(f.St.Chain.BindForward, f.Rot) : f.VelDir;
         dir.Y = 0f;
         if (dir.LengthSquared() < 1e-6f)
@@ -242,10 +248,17 @@ public sealed unsafe partial class Plugin
             return false;
         }
 
-        dir = Vector3.Normalize(dir) * (0.5f * f.LegLen * f.Scale.Y);
-        return this.TryGround(f.PosAnchor + dir, in f, out _, out var ahead)
-            && this.TryGround(f.PosAnchor - dir, in f, out _, out var behind)
-            && MathF.Abs(ahead - behind) > f.StepTol * f.Scale.Y;
+        var half = 0.5f * f.LegLen * f.Scale.Y;
+        var a = f.PosAnchor + (Vector3.Normalize(dir) * half);
+        var b = f.PosAnchor - (Vector3.Normalize(dir) * half);
+        if (!this.Raycast(new Vector3(a.X, f.ProbeTop, a.Z), -Vector3.UnitY, out var ahead, f.MaxDist)
+            || !this.Raycast(new Vector3(b.X, f.ProbeTop, b.Z), -Vector3.UnitY, out var behind, f.MaxDist))
+        {
+            return false;
+        }
+
+        slope = (GroundAt(in ahead, a.X, a.Z, out _) - GroundAt(in behind, b.X, b.Z, out _)) / (2f * half);
+        return true;
     }
 
     // Candidates lie on a fan of lines, so on a thin support the cheapest fitting pair can be much wider than it needs

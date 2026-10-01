@@ -101,11 +101,16 @@ public sealed unsafe partial class Plugin
         snap.Height = chr->Height * chr->Scale;
         snap.IsJumping = chr->IsJumping();
         snap.GPose = ClientState.IsGPosing;
-        // Group pose may raise the cutscene condition too, so it is not trusted while posing on purpose.
+        // Group pose may raise the cutscene condition too, so no context is trusted while posing on purpose.
         var on = c.WorksIn(snap.GPose);
-        snap.Conditions = (!(on && snap.GPose) && Condition.Any(this.globalFlags)) || (local && Condition.Any(this.gateFlags));
+        var posing = on && snap.GPose;
+        snap.Conditions = (!posing && Condition.Any(this.globalFlags)) || (local && Condition.Any(this.gateFlags));
+        snap.InDuty = Condition.Any(this.dutyFlags);
+        snap.InCutscene = Condition.Any(this.cutsceneFlags);
+        snap.WeaponDrawn = chr->IsWeaponDrawn;
+        snap.OffHere = !posing && !c.WorksHere(snap.InDuty, snap.WeaponDrawn, snap.InCutscene);
         // MovementState is the per-character reading of what ICondition tells us about ourselves: flying and diving.
-        var clear = on && !retire && !snap.Conditions && chr->MoveController.MovementState == MovementStateOptions.Normal;
+        var clear = on && !retire && !snap.Conditions && !snap.OffHere && chr->MoveController.MovementState == MovementStateOptions.Normal;
         // InPositionLoop carries the EmoteMode row in ModeParam: 1 ground sit, 2 chair, 3 sleep. A chair is furniture,
         // not ground. Every other looping emote is EmoteLoop, a dance and /pushups alike, so the pose decides: latched
         // low, released high, because /pushups crosses any single threshold every rep. HipFrac is last frame's.
@@ -151,6 +156,8 @@ public sealed unsafe partial class Plugin
         snap.Speed = f.Speed;
 
         var rawDrop = 0f;
+        // 0 standing, 1 at a run: how far the body follows the ground under itself rather than the feet that are down.
+        var stride = c.StrideTau > 0f ? Math.Clamp(f.Speed / RunSpeed, 0f, 1f) : 0f;
         var body = new BodyRange { Lo = float.MinValue, Hi = float.MaxValue, GatherWant = float.MaxValue };
         var bodyDesired = Vector3.Zero;
         if (poseOk)
@@ -201,13 +208,23 @@ public sealed unsafe partial class Plugin
             // `hi` below pins the body to the lowest planted foot. No share is left for the other leg: legs only
             // shorten, and the lowest is already as straight as it gets.
             var want = body.WantWeight > 0f ? body.WantSum / body.WantWeight : f.BaseY;
+            // At a run only one foot is ever down, and on a staircase each lands a tread or two from the last: following
+            // it, and being pinned to its reach, lifts or drops the body in a lurch every stride. The ground under the
+            // body, eased over a stride, is smooth; the legs take up the rest, a foot hanging a little at either end.
+            if (stride > 0f && this.TryGround(HipsAt(in f), in f, out _, out var under))
+            {
+                want += (((under - f.OriginY) / f.Scale.Y) - want) * stride;
+            }
+
             if (body.GatherWant < float.MaxValue)
             {
                 want = MathF.Max(want, body.GatherWant);
             }
 
-            // Reach wins over knee comfort: a foot left hanging reads worse than a knee folded past its cap.
-            var hi = MathF.Min(body.Hi, f.BaseY + (c.MaxPelvisRaiseFrac * f.LegLen));
+            // Standing, reach wins over knee comfort: a foot left hanging reads worse than a knee folded past its cap.
+            var cap = f.BaseY + (c.MaxPelvisRaiseFrac * f.LegLen);
+            var hi = MathF.Min(body.Hi, cap);
+            hi += (cap - hi) * stride;
             var lo = MathF.Min(MathF.Max(body.Lo, f.BaseY - f.MaxDrop), hi);
             rawDrop = Math.Clamp(want, lo, hi);
         }
@@ -216,7 +233,7 @@ public sealed unsafe partial class Plugin
             st.ClearGather();
         }
 
-        st.SmoothDrop = Toward(st.SmoothDrop, rawDrop, Ease(dt, c.PelvisTau));
+        st.SmoothDrop = Toward(st.SmoothDrop, rawDrop, Ease(dt, c.PelvisTau + ((c.StrideTau - c.PelvisTau) * stride)));
         var applied = st.SmoothDrop * st.Blend;
         snap.RawDrop = rawDrop;
         snap.SmoothDrop = st.SmoothDrop;
@@ -236,6 +253,11 @@ public sealed unsafe partial class Plugin
                 ref var foot = ref Foot(ref snap, s);
                 this.PlaceFoot(ref f, s, ref foot, applied);
             }
+        }
+        else
+        {
+            Array.Fill(st.FootLift, float.NaN);
+            Array.Fill(st.LastAnkle, new Vector3(float.NaN));
         }
 
         this.LeanSpine(ref f, ref snap, active);
@@ -338,8 +360,7 @@ public sealed unsafe partial class Plugin
     // carries the root far from the origin stands the feet well above or below the logical position.
     private void ProbeBase(ref Frame f)
     {
-        var hips = (Bones.Pos(in f.Bones[f.St.Chain.Left.Hip]) + Bones.Pos(in f.Bones[f.St.Chain.Right.Hip])) * 0.5f;
-        var at = f.PosAnchor + Vector3.Transform(f.Scale * new Vector3(hips.X, 0f, hips.Z), f.Rot);
+        var at = HipsAt(in f);
         if (!this.TryGround(at, in f, out _, out var y))
         {
             // Nothing in the window: look again from headroom height, no higher, or a bridge overhead reads as the floor.
@@ -354,6 +375,13 @@ public sealed unsafe partial class Plugin
 
         f.BaseY = (y - f.OriginY) / f.Scale.Y;
         f.ProbeTop = f.OriginY + (f.BaseY * f.Scale.Y) + f.RayUp;
+    }
+
+    // World point under the middle of the hips, at the origin's height.
+    private static Vector3 HipsAt(in Frame f)
+    {
+        var hips = (Bones.Pos(in f.Bones[f.St.Chain.Left.Hip]) + Bones.Pos(in f.Bones[f.St.Chain.Right.Hip])) * 0.5f;
+        return f.PosAnchor + Vector3.Transform(f.Scale * new Vector3(hips.X, 0f, hips.Z), f.Rot);
     }
 
     // Three probes along the sole, cast from character height so a foot against a riser does not see the step top; the
@@ -388,6 +416,8 @@ public sealed unsafe partial class Plugin
             cand[n++] = toe;
         }
 
+        var travel = foot.AnkleWorld - f.St.LastAnkle[s];
+        f.St.LastAnkle[s] = foot.AnkleWorld;
         foot.Hit = n > 0;
         if (!foot.Hit)
         {
@@ -403,8 +433,44 @@ public sealed unsafe partial class Plugin
         foot.Material = chosen.Material;
 
         // Evaluated at the ankle's XZ rather than at the winning probe: on a slope the mid-foot probe is half a foot away.
-        foot.GroundModelY = (GroundAt(in chosen, foot.AnkleWorld.X, foot.AnkleWorld.Z, out foot.HitNormal) - f.OriginY) / f.Scale.Y;
+        var ground = GroundAt(in chosen, foot.AnkleWorld.X, foot.AnkleWorld.Z, out foot.HitNormal) + this.StepAhead(in f, in foot, in chosen, travel);
+        foot.GroundModelY = (ground - f.OriginY) / f.Scale.Y;
         foot.OverEdge = foot.GroundModelY - f.BaseY < -f.MaxStepDown;
+    }
+
+    // How far the ground rises in a step, over and above the plane under the foot, where a moving foot will be three
+    // Foot smoothing times from now. The smoothing lags a foot at swing speed by most of a tread, so a rise has to be
+    // seen coming or the foot reaches the edge still low. A slope matches its own plane and gets nothing; so does a
+    // planted foot, which is not travelling; a drop is left to the smoothing, a foot floating past an edge being harmless.
+    private float StepAhead(in Frame f, in FootSnapshot foot, in RaycastHit under, Vector3 travel)
+    {
+        var lead = 3f * this.Settings.FootTau;
+        if (lead <= 0f || f.Dt < 1e-4f)
+        {
+            return 0f;
+        }
+
+        var ahead = new Vector3(travel.X, 0f, travel.Z) * (lead / f.Dt);
+        var cap = 0.5f * f.LegLen * f.Scale.Y;
+        // Forward only: a planted foot the animation slides back, down a staircase, would read the riser behind it.
+        var len2 = ahead.LengthSquared();
+        if (!float.IsFinite(len2) || len2 < 1e-6f || Vector3.Dot(ahead, f.VelDir) <= 0f)
+        {
+            return 0f;
+        }
+
+        if (len2 > cap * cap)
+        {
+            ahead *= cap / MathF.Sqrt(len2);
+        }
+
+        var at = foot.AnkleWorld + ahead;
+        if (!this.TryGround(at, in f, out _, out var y) || ((y - f.OriginY) / f.Scale.Y) - f.BaseY > f.MaxStep)
+        {
+            return 0f;
+        }
+
+        return MathF.Max(0f, y - GroundAt(in under, at.X, at.Z, out _));
     }
 
     private void ArrangeStance(ref Frame f, ref Snapshot snap, scoped Span<Vector3> desired, out Vector3 bodyDesired)
@@ -578,21 +644,23 @@ public sealed unsafe partial class Plugin
     private void PlaceFoot(ref Frame f, int s, ref FootSnapshot foot, float applied)
     {
         var c = this.Settings;
-        if (!foot.Hit || MathF.Abs(foot.GroundModelY - f.BaseY) > f.MaxStep || foot.OverEdge)
+        // A foot with no ground it may stand on rides with the body, and gets neither tilt nor yaw (Contact stays 0).
+        var offset = 0f;
+        if (foot.Hit && MathF.Abs(foot.GroundModelY - f.BaseY) <= f.MaxStep && !foot.OverEdge)
         {
-            return;
+            // Terrain height minus what the pelvis already took, so the foot keeps the clearance the animation gave it.
+            var slopeTan = foot.HitNormal.Y > 0.2f ? MathF.Sqrt(MathF.Max(0f, 1f - foot.HitNormal.Y * foot.HitNormal.Y)) / foot.HitNormal.Y : 0f;
+            offset = foot.GroundModelY - applied + MathF.Max(0f, foot.Rest - foot.AnkleModel.Y) + c.SlopeLiftFrac * f.LegLen * slopeTan;
+            offset = offset < 0
+                ? MathF.Max(offset * foot.Planted, -foot.MaxExtend)
+                : MathF.Min(offset, MathF.Min(f.MaxRaise, foot.MaxRaiseByKnee));
+
+            // Tilt only while the sole is at ground level, or uphill running bends the toes up twice.
+            foot.Contact = Math.Clamp(1f - (foot.AnkleModel.Y - foot.Rest) / MathF.Max(c.TiltFadeFrac * f.LegLen, 1e-3f), 0f, 1f);
         }
 
-        // Terrain height minus what the pelvis already took, so the foot keeps the clearance the animation gave it.
-        var slopeTan = foot.HitNormal.Y > 0.2f ? MathF.Sqrt(MathF.Max(0f, 1f - foot.HitNormal.Y * foot.HitNormal.Y)) / foot.HitNormal.Y : 0f;
-        var offset = foot.GroundModelY - applied + MathF.Max(0f, foot.Rest - foot.AnkleModel.Y) + c.SlopeLiftFrac * f.LegLen * slopeTan;
-        offset = offset < 0
-            ? MathF.Max(offset * foot.Planted, -foot.MaxExtend)
-            : MathF.Min(offset, MathF.Min(f.MaxRaise, foot.MaxRaiseByKnee));
-        foot.Offset = offset * f.St.Blend;
+        foot.Offset = this.EaseLift(in f, s, offset * f.St.Blend, applied);
 
-        // Tilt only while the sole is at ground level, or uphill running bends the toes up twice.
-        foot.Contact = Math.Clamp(1f - (foot.AnkleModel.Y - foot.Rest) / MathF.Max(c.TiltFadeFrac * f.LegLen, 1e-3f), 0f, 1f);
         var tilt = Quaternion.Identity;
         var nModel = Vector3.Transform(foot.HitNormal, Quaternion.Inverse(f.Rot));
         if (nModel.LengthSquared() > 0.5f && nModel.Y > 0f)
@@ -633,6 +701,18 @@ public sealed unsafe partial class Plugin
             foot.IkTargetWorld = f.Pos + Vector3.Transform(f.Scale * ikTarget, f.Rot);
             foot.Solved = SolveLeg(f.Pose, f.St.Chain.Side(s), ikTarget, ankleDelta, f.St.Chain.BindForward, gatherBlend);
         }
+    }
+
+    // The ground under a moving foot is a step function on stairs: the probes cross a tread edge in one frame and the
+    // foot would jump a whole riser. Eased in world space, so a planted foot keeps a still target however the origin
+    // climbs a collision ramp or the body settles; only a change of ground under the foot is spread out.
+    private float EaseLift(in Frame f, int s, float offset, float applied)
+    {
+        ref var lift = ref f.St.FootLift[s];
+        var target = f.OriginY + ((applied + offset) * f.Scale.Y);
+        var tau = this.Settings.FootTau;
+        lift = float.IsFinite(lift) && tau > 0f ? Toward(lift, target, Ease(f.Dt, tau)) : target;
+        return ((lift - f.OriginY) / f.Scale.Y) - applied;
     }
 
     // How far down the body is, which weights the tilt: the sit-down animation starts upright, and an upright body
@@ -679,17 +759,13 @@ public sealed unsafe partial class Plugin
     {
         var c = this.Settings;
         var leanTarget = 0f;
-        if (active && c.SlopeLean && f.Speed > 0.3f)
+        // Over a stride rather than off the triangles under the feet, which on a staircase are its flat treads.
+        if (active && c.SlopeLean && f.Speed > 0.3f && this.Incline(in f, out var uphill))
         {
-            var n = (snap.Left.Hit ? snap.Left.HitNormal : Vector3.Zero) + (snap.Right.Hit ? snap.Right.HitNormal : Vector3.Zero);
-            if (n.Y > 0.2f)
-            {
-                var uphill = -(n.X * f.VelDir.X + n.Z * f.VelDir.Z) / n.Y; // slope tangent along travel, positive uphill
-                var slopeAngle = MathF.Atan(uphill);
-                var lean = slopeAngle * (slopeAngle >= 0 ? c.LeanUphillGain : c.LeanDownhillGain) * Math.Clamp(f.Speed / RunSpeed, 0f, 1f);
-                var cap = MathF.Abs(c.MaxLeanDeg) * MathF.PI / 180f;
-                leanTarget = Math.Clamp(lean, -cap, cap);
-            }
+            var slopeAngle = MathF.Atan(uphill);
+            var lean = slopeAngle * (slopeAngle >= 0 ? c.LeanUphillGain : c.LeanDownhillGain) * Math.Clamp(f.Speed / RunSpeed, 0f, 1f);
+            var cap = MathF.Abs(c.MaxLeanDeg) * MathF.PI / 180f;
+            leanTarget = Math.Clamp(lean, -cap, cap);
         }
 
         f.St.Lean = Toward(f.St.Lean, leanTarget, Ease(f.Dt, c.LeanTau));
@@ -752,7 +828,8 @@ public sealed unsafe partial class Plugin
         // that reads as a metre a second of noise while standing still.
         var vel = f.VelDir * f.Speed;
         // Indexed rather than enumerated: IObjectTable.GetEnumerator returns the interface, which allocates per frame.
-        for (var i = 0; i < Objects.Length; i++)
+        // Only the world's own slots: everything from PosedFirst on is a copy or a UI actor, never a body to run into.
+        for (var i = 0; i < Math.Min(Objects.Length, PosedFirst); i++)
         {
             var o = Objects[i];
             // Players, and townspeople only when asked. BattleNpc is every monster, pet, egi, carbuncle, chocobo companion
@@ -860,6 +937,8 @@ public sealed unsafe partial class Plugin
             {
                 this.WantGrunt((nint)chr, st.Id);
                 this.WantGrunt(o.Address, o.GameObjectId);
+                this.shoveSoundAt = myTorso + (to * 0.5f);
+                this.LastBump = $"{o.Name} (slot {i}, {o.ObjectKind} {o.BaseId}, model {other->ModelContainer.ModelCharaId}, {(o.IsTargetable ? "targetable" : "untargetable")})";
             }
 
             return;

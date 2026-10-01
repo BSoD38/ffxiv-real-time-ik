@@ -10,18 +10,24 @@ namespace FootIk;
 public sealed unsafe partial class Plugin
 {
     // ICondition only ever describes the local player, so the flags split: a mount, a jump or a dive of ours says
-    // nothing about anyone else, while a cutscene or a zone load stops the plugin for everyone.
+    // nothing about anyone else, while a zone load, a duty or a cutscene is the same for everyone.
     private readonly ConditionFlag[] gateFlags =
     [
         ConditionFlag.Jumping, ConditionFlag.Mounted, ConditionFlag.Swimming, ConditionFlag.Diving, ConditionFlag.InFlight,
     ];
 
-    private readonly ConditionFlag[] globalFlags = [ConditionFlag.WatchingCutscene, ConditionFlag.BetweenAreas];
+    private readonly ConditionFlag[] globalFlags = [ConditionFlag.BetweenAreas];
+    private readonly ConditionFlag[] dutyFlags = [ConditionFlag.BoundByDuty, ConditionFlag.BoundByDuty56, ConditionFlag.BoundByDuty95];
+    private readonly ConditionFlag[] cutsceneFlags = [ConditionFlag.WatchingCutscene, ConditionFlag.WatchingCutscene78];
 
     // In group pose the game renders copies of the characters, kept in these object-table slots, and hides the
     // originals. A copy keeps the name and home world but not the entity id.
     private const int PosedFirst = 200;
     private const int PosedLast = 239;
+
+    // Past the copies sit the actors of the character window, examine, try-on, dye preview and plates: player-kind
+    // bodies with no name and no data id, drawn, and positioned somewhere in the world all the same.
+    private const int ScreenActorsFirst = PosedLast + 1;
     private nint posedAddr;
 
     private void Tick()
@@ -81,7 +87,7 @@ public sealed unsafe partial class Plugin
         var radius2 = c.OthersRadius * c.OthersRadius;
         var n = 0;
         // Indexed rather than enumerated: IObjectTable.GetEnumerator returns the interface, which allocates per frame.
-        for (var i = 0; i < Objects.Length; i++)
+        for (var i = 0; i < Math.Min(Objects.Length, ScreenActorsFirst); i++)
         {
             var o = Objects[i];
             if (o == null || o.Address == 0 || o.Address == localAddr || o.Address == this.posedAddr)

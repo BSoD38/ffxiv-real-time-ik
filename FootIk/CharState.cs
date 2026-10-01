@@ -25,6 +25,8 @@ internal sealed class CharState
     public readonly Vector3[] LatchTarget = new Vector3[2]; // world space
     public readonly bool[] Latched = new bool[2];
     public readonly bool[] LatchNarrow = new bool[2]; // the latched target stands on a support about a boot wide or narrower
+    public readonly float[] FootLift = [float.NaN, float.NaN]; // world Y each foot is carried to, NaN when it was not placed last frame
+    public readonly Vector3[] LastAnkle = [new(float.NaN), new(float.NaN)]; // world, the animated ankle last frame
     public Vector3 BodyShift;      // model space
     public float Lean;             // radians
     public float BumpAge = float.PositiveInfinity; // seconds since this body was last bumped

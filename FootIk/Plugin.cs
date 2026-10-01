@@ -49,6 +49,7 @@ public sealed unsafe partial class Plugin : IAsyncDalamudPlugin
     public int Faults { get; private set; }
     public string? LastError { get; private set; }
     public double LastMicros { get; private set; }
+    public string? LastBump { get; private set; }
     public double MaxMicros { get; private set; }
     public int Tracked { get; private set; }
     public Snapshot Snap;
@@ -108,7 +109,7 @@ public sealed unsafe partial class Plugin : IAsyncDalamudPlugin
         }
 
         PluginInterface.UiBuilder.Draw += this.UpdateMesh;
-        Framework.Update += this.PlayGrunts;
+        Framework.Update += this.PlaySounds;
 
         // A wrong solver writes wrong-but-finite poses, which no guard downstream can catch: start inert instead.
         this.Tripped = this.SelfTest != "PASS";
@@ -302,7 +303,7 @@ public sealed unsafe partial class Plugin : IAsyncDalamudPlugin
     public ValueTask DisposeAsync()
     {
         Commands.RemoveHandler("/ik");
-        Framework.Update -= this.PlayGrunts;
+        Framework.Update -= this.PlaySounds;
         PluginInterface.UiBuilder.Draw -= this.UpdateMesh;
 
         var window = this.overlay;
@@ -327,5 +328,6 @@ public sealed unsafe partial class Plugin : IAsyncDalamudPlugin
         this.Release();
         this.moveHook?.Dispose();
         this.DisposeMesh();
+        this.DropShoveSound();
     }
 }
