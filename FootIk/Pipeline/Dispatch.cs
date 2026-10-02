@@ -161,11 +161,12 @@ public sealed unsafe partial class Plugin
             return true;
         }
 
-        var want = StatusFlags.PartyMember | StatusFlags.AllianceMember;
-        if (who != Who.Party)
+        var want = who switch
         {
-            want |= StatusFlags.Friend;
-        }
+            Who.Party => StatusFlags.PartyMember | StatusFlags.AllianceMember,
+            Who.Friends => StatusFlags.Friend,
+            _ => StatusFlags.PartyMember | StatusFlags.AllianceMember | StatusFlags.Friend,
+        };
 
         return o is ICharacter ch && (ch.StatusFlags & want) != 0;
     }

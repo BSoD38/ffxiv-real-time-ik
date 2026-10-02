@@ -27,6 +27,7 @@ public struct FootSnapshot
     public Vector3 HitNormal;
     public ulong Material;
     public float GroundModelY;
+    public float GroundTopY; // the highest probe under the sole, where GroundModelY is their median
     public float AnkleAboveGround;
     public bool OverEdge;
     public bool Gathered;
@@ -63,7 +64,6 @@ public struct Snapshot
     public float SpinePitchDeg;
     public float BumpDeg;
     public float Height; // the game's own reading of the body's height, what bumps compare
-    public int Weapons;  // carried weapons found fastened to the body this frame
     public bool OnFloor;
     public float SitTiltDeg;
     public float HipFrac;

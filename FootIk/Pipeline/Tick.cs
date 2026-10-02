@@ -24,6 +24,8 @@ public sealed unsafe partial class Plugin
         public float OriginY, RayUp, RayDown, MaxDist, Reach;
         public float BaseY, ProbeTop;
         public float Speed;
+        public float Stride; // 0 standing, 1 at a run
+        public float Climb;  // world, how far the body rose since last frame
         public Vector3 VelDir;
         public bool Still;
         public int Dirs; // gather search directions, 0 when this character does not gather at all
@@ -156,14 +158,16 @@ public sealed unsafe partial class Plugin
         snap.Speed = f.Speed;
 
         var rawDrop = 0f;
-        // 0 standing, 1 at a run: how far the body follows the ground under itself rather than the feet that are down.
+        // How far the body follows the ground under itself rather than the feet that are down, and how far a foot
+        // behind the body only keeps clear of the ground.
         var stride = c.StrideTau > 0f ? Math.Clamp(f.Speed / RunSpeed, 0f, 1f) : 0f;
+        f.Stride = stride;
         var body = new BodyRange { Lo = float.MinValue, Hi = float.MaxValue, GatherWant = float.MaxValue };
         var bodyDesired = Vector3.Zero;
         if (poseOk)
         {
             this.ReadTransform(chr, ref f);
-            f.Weapons = c.MoveWeapons && active ? anchors[..AnchorWeapons(chr, skel, pose, anchors)] : Span<WeaponAnchor>.Empty;
+            f.Weapons = active ? anchors[..AnchorWeapons(chr, skel, pose, anchors)] : Span<WeaponAnchor>.Empty;
             // Written here rather than under the gate: the overlay draws the ruler from these, and a snapshot is blank
             // every tick, so leaving them to the gated path puts the ruler at the world origin whenever it is shut.
             snap.Yaw = f.Yaw;
@@ -248,6 +252,9 @@ public sealed unsafe partial class Plugin
 
         if (active && st.Blend > 0)
         {
+            var bodyY = f.OriginY + (applied * f.Scale.Y);
+            f.Climb = float.IsFinite(st.BodyY) ? bodyY - st.BodyY : 0f;
+            st.BodyY = bodyY;
             for (var s = 0; s < 2; s++)
             {
                 ref var foot = ref Foot(ref snap, s);
@@ -256,6 +263,7 @@ public sealed unsafe partial class Plugin
         }
         else
         {
+            st.BodyY = float.NaN;
             Array.Fill(st.FootLift, float.NaN);
             Array.Fill(st.LastAnkle, new Vector3(float.NaN));
         }
@@ -267,8 +275,6 @@ public sealed unsafe partial class Plugin
         {
             CarryWeapons(f.Skel, f.Pose, f.Weapons);
         }
-
-        snap.Weapons = f.Weapons.Length;
     }
 
     private static ref FootSnapshot Foot(ref Snapshot snap, int s) => ref (s == 0 ? ref snap.Left : ref snap.Right);
@@ -428,6 +434,7 @@ public sealed unsafe partial class Plugin
         // Three hits give the median, two give the lower (never float over a void edge).
         cand[..n].Sort(ByHeight);
         var chosen = n == 3 ? cand[1] : cand[0];
+        foot.GroundTopY = (cand[n - 1].Point.Y - f.OriginY) / f.Scale.Y;
 
         foot.HitPoint = chosen.Point;
         foot.Material = chosen.Material;
@@ -645,21 +652,40 @@ public sealed unsafe partial class Plugin
     {
         var c = this.Settings;
         // A foot with no ground it may stand on rides with the body, and gets neither tilt nor yaw (Contact stays 0).
+        // `grounded` is the share of the ground's height the foot takes; the rest of it rides with the body.
         var offset = 0f;
+        var grounded = 0f;
         if (foot.Hit && MathF.Abs(foot.GroundModelY - f.BaseY) <= f.MaxStep && !foot.OverEdge)
         {
             // Terrain height minus what the pelvis already took, so the foot keeps the clearance the animation gave it.
             var slopeTan = foot.HitNormal.Y > 0.2f ? MathF.Sqrt(MathF.Max(0f, 1f - foot.HitNormal.Y * foot.HitNormal.Y)) / foot.HitNormal.Y : 0f;
             offset = foot.GroundModelY - applied + MathF.Max(0f, foot.Rest - foot.AnkleModel.Y) + c.SlopeLiftFrac * f.LegLen * slopeTan;
-            offset = offset < 0
-                ? MathF.Max(offset * foot.Planted, -foot.MaxExtend)
-                : MathF.Min(offset, MathF.Min(f.MaxRaise, foot.MaxRaiseByKnee));
+
+            if (offset < 0)
+            {
+                grounded = foot.Planted;
+                offset = MathF.Max(offset * grounded, -foot.MaxExtend);
+            }
+            else
+            {
+                // At a run the foot behind the body only keeps clear of the higher tread behind it, running down:
+                // carrying its whole kick over that tread throws the leg up. Clear is the lower of ankle and toes over
+                // the highest ground under the sole, because a kick points the toes down. A foot still on its tread
+                // has no clearance to give up, so it stays on it.
+                var side = f.St.Chain.Side(s);
+                var toes = Bones.Pos(in f.Bones[side.Toes]).Y - side.ToeRestBind - (c.RestAdjustFrac * f.LegLen);
+                var margin = MathF.Min(MathF.Max(0f, foot.AnkleModel.Y - foot.Rest), toes) - (foot.GroundTopY - foot.GroundModelY);
+                var raise = offset + ((MathF.Max(0f, offset - margin) - offset) * Trailing(in f, in foot));
+                grounded = offset > 1e-5f ? Math.Clamp(raise / offset, 0f, 1f) : 1f;
+                offset = MathF.Min(raise, MathF.Min(f.MaxRaise, foot.MaxRaiseByKnee));
+            }
 
             // Tilt only while the sole is at ground level, or uphill running bends the toes up twice.
             foot.Contact = Math.Clamp(1f - (foot.AnkleModel.Y - foot.Rest) / MathF.Max(c.TiltFadeFrac * f.LegLen, 1e-3f), 0f, 1f);
         }
 
-        foot.Offset = this.EaseLift(in f, s, offset * f.St.Blend, applied);
+        // The easing is not allowed to pull the foot past the leg's reach either.
+        foot.Offset = MathF.Max(this.EaseLift(in f, s, offset * f.St.Blend, applied, grounded), -foot.MaxExtend);
 
         var tilt = Quaternion.Identity;
         var nModel = Vector3.Transform(foot.HitNormal, Quaternion.Inverse(f.Rot));
@@ -703,15 +729,32 @@ public sealed unsafe partial class Plugin
         }
     }
 
+    // How far behind the hips a foot is along travel, 0..1 over a quarter leg, weighted by running speed.
+    private static float Trailing(in Frame f, in FootSnapshot foot)
+    {
+        var travel = new Vector3(f.VelDir.X, 0f, f.VelDir.Z);
+        var len = travel.Length();
+        if (f.Stride <= 0f || len < 1e-3f)
+        {
+            return 0f;
+        }
+
+        var hips = HipsAt(in f);
+        var behind = -Vector3.Dot(new Vector3(foot.AnkleWorld.X - hips.X, 0f, foot.AnkleWorld.Z - hips.Z), travel / len);
+        return Math.Clamp(behind / (0.25f * f.LegLen * f.Scale.Y), 0f, 1f) * f.Stride;
+    }
+
     // The ground under a moving foot is a step function on stairs: the probes cross a tread edge in one frame and the
     // foot would jump a whole riser. Eased in world space, so a planted foot keeps a still target however the origin
-    // climbs a collision ramp or the body settles; only a change of ground under the foot is spread out.
-    private float EaseLift(in Frame f, int s, float offset, float applied)
+    // climbs a collision ramp or the body settles; only a change of ground under the foot is spread out. The share of
+    // the foot riding with the body is carried by the body's climb first: eased in world space too, a foot in the air
+    // trails below a body running up a staircase and stretches the leg.
+    private float EaseLift(in Frame f, int s, float offset, float applied, float grounded)
     {
         ref var lift = ref f.St.FootLift[s];
         var target = f.OriginY + ((applied + offset) * f.Scale.Y);
         var tau = this.Settings.FootTau;
-        lift = float.IsFinite(lift) && tau > 0f ? Toward(lift, target, Ease(f.Dt, tau)) : target;
+        lift = float.IsFinite(lift) && tau > 0f ? Toward(lift + (f.Climb * (1f - grounded)), target, Ease(f.Dt, tau)) : target;
         return ((lift - f.OriginY) / f.Scale.Y) - applied;
     }
 

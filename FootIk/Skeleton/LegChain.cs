@@ -40,6 +40,7 @@ public struct LegSide
     public int[] ParentSlot; // slot of each subtree bone's parent within Subtree
     public int KneeSlot, AnkleSlot, ToesSlot;
     public float RestBind;   // ankle model-space Y in the bind pose, where the sole sits on the origin plane
+    public float ToeRestBind; // the same for the toes
 
     public readonly bool Resolved => this.Hip >= 0 && this.Knee >= 0 && this.Ankle >= 0 && this.Toes >= 0 && this.Subtree is { Length: > 3 };
 }
@@ -151,6 +152,8 @@ public unsafe struct LegChain
 
         chain.Left.RestBind = BindModel(hs, chain.Left.Ankle).Y;
         chain.Right.RestBind = BindModel(hs, chain.Right.Ankle).Y;
+        chain.Left.ToeRestBind = BindModel(hs, chain.Left.Toes).Y;
+        chain.Right.ToeRestBind = BindModel(hs, chain.Right.Toes).Y;
         chain.LegLength = (BindLegLength(hs, in chain.Left) + BindLegLength(hs, in chain.Right)) * 0.5f;
         var fwd = (BindModel(hs, chain.Left.Toes) - BindModel(hs, chain.Left.Ankle)) + (BindModel(hs, chain.Right.Toes) - BindModel(hs, chain.Right.Ankle));
         fwd.Y = 0f;

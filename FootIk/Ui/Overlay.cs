@@ -65,8 +65,6 @@ internal sealed class Overlay : NativeAddon
     private bool rebuild;
     private bool dirty;
     private long dirtyAt;
-    private float rawPeak;
-    private float lostPeak;
 
     // One row per tab: its name on the bar, what builds it, and what its reset button puts back. The Status tab has no
     // field list and resets everything instead. nameof so renaming a setting breaks the build rather than leaving a
@@ -91,7 +89,7 @@ internal sealed class Overlay : NativeAddon
         ("Leaning", this.BuildLean,
         [
             nameof(Settings.SlopeLean), nameof(Settings.LeanUphillGain), nameof(Settings.LeanDownhillGain), nameof(Settings.MaxLeanDeg),
-            nameof(Settings.MoveWeapons), nameof(Settings.MaxTotalPitchDeg), nameof(Settings.MinTotalPitchDeg), nameof(Settings.LeanTau),
+            nameof(Settings.MaxTotalPitchDeg), nameof(Settings.MinTotalPitchDeg), nameof(Settings.LeanTau),
         ]),
         ("Shoving", this.BuildShoving,
         [
@@ -729,7 +727,7 @@ internal sealed class Overlay : NativeAddon
                 this.Slide("Drop smoothing", () => c.PelvisTau, v => c.PelvisTau = v, 0.01f, 0.5f, 100f, v => $"{v:F2} s",
                     "Smoothing on the body height. Higher values will be smoother but might react late to floor height changes."),
                 this.Slide("Running smoothing", () => c.StrideTau, v => c.StrideTau = v, 0f, 0.6f, 100f, v => $"{v:F2} s",
-                    "How smoothly the body moves up and down while running, for example on stairs. Too low and the body lurches with every step. Too high and a foot may hover a moment as it lands. Zero makes the body follow the feet at every speed, as it does when standing."),
+                    "How smoothly the body moves up and down while running, for example on stairs. Too low and the body lurches with every step. Too high and a foot may hover a moment as it lands. Zero makes the body and legs behave at every speed as they do when standing."),
                 this.Slide("Foot smoothing", () => c.FootTau, v => c.FootTau = v, 0f, 0.15f, 100f, v => $"{v:F2} s",
                     "Smoothing on each foot's height as it moves onto a new stair step or ledge. A moving foot starts rising early for a step ahead of it. Too low and the feet jump from step to step. Too high and the feet lift early for steps and hover a moment after stepping down. Zero turns it off."),
                 this.Section("Keep feet out of walls"),
@@ -801,9 +799,6 @@ internal sealed class Overlay : NativeAddon
                 "How far the character leans back when running downhill.", () => c.SlopeLean),
             this.Slide("Max lean", () => c.MaxLeanDeg, v => c.MaxLeanDeg = v, 0f, 45f, 1f, v => $"{v:F0} deg",
                 "How far the character can lean in either direction.", () => c.SlopeLean),
-            this.Section("Carried weapons"),
-            this.Check("Weapons follow the body", () => c.MoveWeapons, v => c.MoveWeapons = v,
-                "Sheathed weapons and shields ride along when the upper body leans, turns or tilts, instead of staying where the animation left them. Turn it off if a weapon ends up floating."),
             this.Fold("Advanced", () =>
             [
                 this.Slide("Max spine pitch", () => c.MaxTotalPitchDeg, v => c.MaxTotalPitchDeg = v, 10f, 90f, 1f, v => $"{v:F0} deg",
@@ -821,28 +816,28 @@ internal sealed class Overlay : NativeAddon
         var c = this.Owner.Settings;
         return
         [
-            this.Check("Flinch when bumping into someone", () => c.Bump, v => c.Bump = v,
+            this.Check("Enable shoving", () => c.Bump, v => c.Bump = v,
                 "Allows you to shove people when running into them. The shove depends on the speed and angle of impact, the difference in height of both people, and other factors."),
-            this.Check("Bump into NPCs", () => c.BumpNpcs, v => c.BumpNpcs = v,
-                "Whether NPCs count. Off, only players can bump you or be bumped. This is separate from who gets their feet placed on the Performance tab.", () => c.Bump),
+            this.Check("Shove NPCs", () => c.BumpNpcs, v => c.BumpNpcs = v,
+                "Whether NPCs count. Off, only players can bump you or be bumped. NPCs might not react to shoving.", () => c.Bump),
             this.Check("Let others shove you", () => c.Shoved, v => c.Shoved = v,
                 "Other players running or walking into you shove you as well.", () => c.Bump),
-            this.Note("They flinch back only when \"Other players\" or \"Everyone\" is set in the performance settings."),
+            this.Note("They flinch back only when they have IK applied: see \"Apply on other characters\" in the performance settings."),
             this.Check("Grunt when shoved", () => c.Grunt, v => c.Grunt = v,
                 "Make both characters grunt when they one or the other is shoved. Has a random chance of playing a grunt.", () => c.Bump),
             this.Check("Impact sound", () => c.ShoveSound, v => c.ShoveSound = v,
-                "Plays a soft thud where the two of you collide. Needs Penumbra installed; without it the bump stays silent.", () => c.Bump),
+                "Plays a soft thud where the two of you collide. Needs Penumbra installed.", () => c.Bump),
             this.Slide("Impact volume", () => c.ShoveVolume, v => c.ShoveVolume = v, 0f, 1f, 100f, v => $"{v * 100f:F0}%",
                 "How loud the thud is. The game's Sound Effects volume applies on top.", () => c.Bump && c.ShoveSound),
             this.Section("Cooldowns"),
             this.Slide("Bump cooldown", () => c.BumpCooldown, v => c.BumpCooldown = v, 0f, 3f, 10f, v => $"{v:F1} s",
-                "The least time between two bumps, whoever they are with. Raise it if a crowd keeps your character flinching.", () => c.Bump),
+                "The least time between two bumps, whoever they are with. Raise it if you don't like continusously shoving crowds.", () => c.Bump),
             this.Slide("Same character", () => c.BumpSameCooldown, v => c.BumpSameCooldown = v, 0f, 10f, 10f, v => $"{v:F1} s",
-                "How long before running into the same character again counts as a new bump.", () => c.Bump),
+                "How long before running into the same character again counts as a new shove.", () => c.Bump),
             this.Fold("Advanced", () =>
             [
                 this.Slide("Bump distance", () => c.BumpRadiusFrac, v => c.BumpRadiusFrac = v, 0.1f, 0.8f, 100f, v => $"{v:F2}  ({this.Metres(v * 2f)} m apart)",
-                    "How close two characters must come to count as touching. Too low and you pass through people without a reaction; too high and you flinch at people you clearly missed.", () => c.Bump),
+                    "How close two characters must come to count as touching. Too low and you pass through people without a reaction; too high and you shove people you clearly missed.", () => c.Bump),
                 this.Slide("Bump strength", () => c.BumpMaxDeg, v => c.BumpMaxDeg = v, 0f, 60f, 1f, v => $"{v:F0} deg",
                     "How far the upper body tips away and turns towards the other character at the moment of impact.", () => c.Bump),
                 this.Slide("Give way", () => c.BumpShoveFrac, v => c.BumpShoveFrac = v, 0f, 0.5f, 100f, v => $"{v:F2}  ({v * this.Owner.Snap.LegLength * 100f:F0} cm)",
@@ -854,7 +849,7 @@ internal sealed class Overlay : NativeAddon
                 this.Slide("Bump speed", () => c.BumpMinSpeed, v => c.BumpMinSpeed = v, 0.2f, 10f, 10f, v => $"{v:F1} m/s",
                     "How fast the two of you must be closing on each other for it to count as a bump. Set it above walking speed and only running bumps; set it low and brushing past someone jolts you.", () => c.Bump),
                 this.Slide("Bump rise", () => c.BumpRiseSeconds, v => c.BumpRiseSeconds = v, 0.02f, 0.3f, 100f, v => $"{v:F2} s",
-                    "How quickly the body reaches its full flinch after the impact.", () => c.Bump),
+                    "How quickly the body reaches its maximum rotation angle after the impact.", () => c.Bump),
                 this.Slide("Bump recovery", () => c.BumpTau, v => c.BumpTau = v, 0.1f, 1.5f, 100f, v => $"{v:F2} s",
                     "How long the body takes to straighten up again.", () => c.Bump),
             ]),
@@ -867,13 +862,13 @@ internal sealed class Overlay : NativeAddon
         return
         [
             this.Check("Work during emotes", () => c.Emotes, v => c.Emotes = v,
-                "Keeps placing the feet through dances and other looping emotes, and settles the body onto the slope when sitting or sleeping on the ground."),
+                "Keeps placing the feet through dances and other looping emotes, and settles the body onto the slope when sitting."),
             this.Check("Tilt lying-down poses too", () => c.FloorTilt, v => c.FloorTilt = v,
-                "Turns the body to follow the slope when lying on the ground, not just when sitting. Affects emotes like pushups and playing dead. Turn it off if the tilt looks worse than leaving the animation alone.",
+                "Turns the body to follow the slope when lying on the ground. Affects emotes like pushups and playing dead.",
                 () => c.Emotes),
-            this.Slide("Max sit tilt", () => c.MaxSitTiltDeg, v => c.MaxSitTiltDeg = v, 0f, 45f, 1f, v => $"{v:F0} deg",
+            this.Slide("Max tilt angle", () => c.MaxSitTiltDeg, v => c.MaxSitTiltDeg = v, 0f, 45f, 1f, v => $"{v:F0} deg",
                 "How far the body may tilt to rest on sloped ground when sitting or sleeping on it. Zero keeps the body upright.", () => c.Emotes),
-            this.Slide("Sit tilt smoothing", () => c.SitTiltTau, v => c.SitTiltTau = v, 0.05f, 1.5f, 100f, v => $"{v:F2} s",
+            this.Slide("Tilt smoothing speed", () => c.SitTiltTau, v => c.SitTiltTau = v, 0.05f, 1.5f, 100f, v => $"{v:F2} s",
                 "How quickly the body settles onto the slope when sitting down, and comes back up when standing.", () => c.Emotes),
         ];
     }
@@ -889,15 +884,15 @@ internal sealed class Overlay : NativeAddon
             this.SlideInt("Max characters", () => c.MaxOthers, v => c.MaxOthers = v, 1, 50, v => $"{v}",
                 "How many characters to apply IK to. Lower this if your frame rate drops in crowds.", () => c.Others),
             this.Slide("Max distance", () => c.OthersRadius, v => c.OthersRadius = v, 3f, 50f, 1f, v => $"{v:F0} yalms",
-                "How far away a character can be and still have its feet placed.", () => c.Others),
+                "How far away from the camera IK is applied.", () => c.Others),
             this.Pick("Apply IK to", () => c.Who, v => c.Who = v,
-                "Which characters around you have IK applied. \"Everyone\" includes NPCs.", () => c.Others),
+                "Which characters around you have IK applied. Party includes your alliance.", () => c.Others),
             this.SlideInt("Gather feet precision", () => c.OthersGatherPrecision, v => c.OthersGatherPrecision = v, 0, 4,
                 v => v == 0 ? "off" : $"{v}  ({4 * v} directions)",
                 "Whether other characters also get their feet gathered onto narrow ledges and rails, and how carefully. Needs Gather feet on the Edges tab.",
                 () => c.Others && c.GatherFeet),
             this.Check("Use higher precision collision", () => c.MeshRefine, v => c.MeshRefine = v,
-                "Places feet on the ground you actually see instead of the simplified shape the game uses for walking. Fixes stairs that otherwise behave like a ramp. Uses some memory, and a little frame time while a new area loads."),
+                "Places feet on the ground you actually see instead of the simplified shape the game uses for collision. Fixes stairs that otherwise behave like a ramp. Uses some memory, and a little frame time while loading a new area."),
             this.Fold("Advanced", () =>
             [
                 this.Slide("Read distance", () => c.MeshRadius, v => c.MeshRadius = v, 10f, 60f, 1f, v => $"{v:F0} yalms",
@@ -908,7 +903,7 @@ internal sealed class Overlay : NativeAddon
             // The scan switches its own setting off when it faults, so the reason it did has to be somewhere.
             this.Readout(() => p.MeshStatus == "off" ? string.Empty : $"Higher precision collision: {p.MeshStatus}"),
             this.Readout(() => $"Working on {p.Tracked} character{(p.Tracked == 1 ? string.Empty : "s")}."),
-            this.Readout(() => $"Frame cost {p.LastMicros:F0} us, max {p.MaxMicros:F0} us."),
+            this.Readout(() => $"Frame cost {p.LastMicros:F0} us."),
         ];
     }
 
@@ -935,7 +930,7 @@ internal sealed class Overlay : NativeAddon
                 : Hooked(p) ? "Running." : "Not running. See Details below."),
             rearm,
             this.Readout(() => p.LastError is null ? string.Empty : $"Last error: {p.LastError}"),
-            this.Readout(() => $"Frame cost {p.LastMicros:F0} us, peak {p.MaxMicros:F0} us"),
+            this.Readout(() => $"Frame cost {p.LastMicros:F0} us"),
             this.Check("Show markers in the world", () => c.ShowMarkers, v => c.ShowMarkers = v, "Draws a dot at each ankle and the ground under it."),
             this.Check("Show a one-metre ruler at your feet", () => c.ShowRuler, v => c.ShowRuler = v, "Draws a metre along the ground and a metre up, ticked every ten centimetres."),
             this.Section("Your character"),
@@ -957,59 +952,32 @@ internal sealed class Overlay : NativeAddon
     private List<NodeBase> BuildDetails()
     {
         var p = this.Owner;
-
-        var peaks = new TextButtonNode
-        {
-            Height = BarHeight,
-            Width = 140f,
-            String = "Reset peaks",
-            OnClick = () =>
-            {
-                this.rawPeak = 0f;
-                this.lostPeak = 0f;
-            },
-        };
-
         return
         [
+            this.Section("Plugin"),
             this.Readout(() => $"Render hook: {p.HookStatus}"),
             this.Readout(() => $"Move hook: {p.MoveHookStatus}"),
-            this.Readout(() => $"Solver self-test: {p.SelfTest}"),
-            this.Readout(() => $"Faults: {p.Faults}  {(p.Tripped ? "TRIPPED" : "armed")}"),
-            this.Readout(() => $"Gate {p.Snap.Gate}   blend {p.Snap.Blend:F2}   speed {p.Snap.Speed:F2} m/s"),
-            this.Readout(() => $"Mode {p.Snap.Mode} ({p.Snap.ModeParam})   jumping {p.Snap.IsJumping}   gpose {p.Snap.GPose}   blocking condition {p.Snap.Conditions}"),
-            this.Readout(() => $"In a duty {p.Snap.InDuty}   cutscene {p.Snap.InCutscene}   weapon drawn {p.Snap.WeaponDrawn}   off here {p.Snap.OffHere}"),
-            // Peaks decay slowly so a value that only exists for a frame or two while walking can still be read off.
-            this.Readout(() =>
-            {
-                this.rawPeak = MathF.Max(this.rawPeak * 0.99f, MathF.Abs(p.Snap.RawDrop));
-                return $"Body drop raw {p.Snap.RawDrop:F3}  smooth {p.Snap.SmoothDrop:F3}  applied {p.Snap.Applied:F3}  peak {this.rawPeak:F3}";
-            }),
-            this.Readout(() =>
-            {
-                this.lostPeak = MathF.Max(this.lostPeak * 0.99f, MathF.Abs(p.Snap.OffsetSeen - p.Snap.OffsetWritten));
-                return $"Draw offset ours {p.Snap.OffsetWritten:F3}  game holds {p.Snap.OffsetSeen:F3}  lost peak {this.lostPeak:F3}";
-            }),
-            peaks,
-            this.Readout(() => $"Ground under body {p.Snap.BaseY:F3}   body shift {Fmt(p.Snap.BodyShift)}"),
-            this.Readout(() => $"Spine pitch {p.Snap.SpinePitchDeg:F1} deg   lean {p.Snap.LeanDeg:F1} deg   body height {p.Snap.Height:F2}   weapons following {p.Snap.Weapons}"),
-            this.Readout(() => $"On the floor {p.Snap.OnFloor}   hips {p.Snap.HipFrac:F2}   body tilt {p.Snap.SitTiltDeg:F1} deg"),
-            this.Readout(() => p.Snap.HasPose && !p.Snap.ChainResolved ? "Chain: not resolved (j_asi_[a,b,d,e]_[lr] missing)" : string.Empty),
+            this.Readout(() => $"Solver self-test: {p.SelfTest}   faults {p.Faults}"),
+            this.Readout(() => p.Snap.HasPose && !p.Snap.ChainResolved ? "Leg bones not found (j_asi_[a,b,d,e]_[lr] missing)" : string.Empty),
+            this.Section("Gate"),
+            this.Readout(() => $"Mode {p.Snap.Mode} ({p.Snap.ModeParam})   open {YesNo(p.Snap.Gate)}   blend {p.Snap.Blend:F2}"),
+            this.Readout(() => $"Jumping {YesNo(p.Snap.IsJumping)}   group pose {YesNo(p.Snap.GPose)}   blocking condition {YesNo(p.Snap.Conditions)}   on the floor {YesNo(p.Snap.OnFloor)}"),
+            this.Readout(() => $"In a duty {YesNo(p.Snap.InDuty)}   cutscene {YesNo(p.Snap.InCutscene)}   weapon drawn {YesNo(p.Snap.WeaponDrawn)}   off here {YesNo(p.Snap.OffHere)}"),
+            this.Section("Body"),
+            this.Readout(() => $"Drop raw {p.Snap.RawDrop:F3}   smooth {p.Snap.SmoothDrop:F3}   applied {p.Snap.Applied:F3}"),
+            this.Readout(() => $"Draw offset ours {p.Snap.OffsetWritten:F3}   game holds {p.Snap.OffsetSeen:F3}"),
+            this.Readout(() => $"Ground under body {p.Snap.BaseY:F3}   shift {Fmt(p.Snap.BodyShift)}"),
+            this.Readout(() => $"Spine pitch {p.Snap.SpinePitchDeg:F1} deg   hips {p.Snap.HipFrac:F2}   character height {p.Snap.Height:F2}"),
+            this.Section("Feet"),
             this.ColumnHeads(),
             this.Columns("ground hit", () => YesNo(p.Snap.Left.Hit), () => YesNo(p.Snap.Right.Hit)),
             this.Columns("ground Y", () => $"{p.Snap.Left.GroundModelY:F3}", () => $"{p.Snap.Right.GroundModelY:F3}"),
             this.Columns("ankle above ground", () => $"{p.Snap.Left.AnkleAboveGround:F3}", () => $"{p.Snap.Right.AnkleAboveGround:F3}"),
             this.Columns("rest (bind)", () => $"{p.Snap.Left.Rest:F3}", () => $"{p.Snap.Right.Rest:F3}"),
-            this.Columns("delta",
-                () => $"{(p.Snap.Left.Hit ? p.Snap.Left.Rest - p.Snap.Left.AnkleAboveGround : 0f):F3}",
-                () => $"{(p.Snap.Right.Hit ? p.Snap.Right.Rest - p.Snap.Right.AnkleAboveGround : 0f):F3}"),
-            this.Columns("planted", () => $"{p.Snap.Left.Planted:F2}", () => $"{p.Snap.Right.Planted:F2}"),
             this.Columns("can extend", () => $"{p.Snap.Left.MaxExtend:F3}", () => $"{p.Snap.Right.MaxExtend:F3}"),
             this.Columns("can raise", () => $"{p.Snap.Left.MaxRaiseByKnee:F3}", () => $"{p.Snap.Right.MaxRaiseByKnee:F3}"),
-            this.Columns("offset", () => $"{p.Snap.Left.Offset:F3}", () => $"{p.Snap.Right.Offset:F3}"),
             this.Columns("contact", () => $"{p.Snap.Left.Contact:F2}", () => $"{p.Snap.Right.Contact:F2}"),
-            this.Columns("tilt", () => $"{p.Snap.Left.TiltDeg:F1}", () => $"{p.Snap.Right.TiltDeg:F1}"),
-            this.Columns("yaw", () => $"{p.Snap.Left.YawDeg:F1}", () => $"{p.Snap.Right.YawDeg:F1}"),
+            this.Columns("yaw", () => $"{p.Snap.Left.YawDeg:F1} deg", () => $"{p.Snap.Right.YawDeg:F1} deg"),
             this.Columns("solved", () => YesNo(p.Snap.Left.Solved), () => YesNo(p.Snap.Right.Solved)),
             this.Columns("gather shift", () => Fmt(p.Snap.Left.GatherShift), () => Fmt(p.Snap.Right.GatherShift)),
             this.Columns("gather refused", () => p.Snap.Left.GatherBlock.ToString(), () => p.Snap.Right.GatherBlock.ToString()),

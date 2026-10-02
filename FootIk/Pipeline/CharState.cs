@@ -27,6 +27,7 @@ internal sealed class CharState
     public readonly bool[] LatchNarrow = new bool[2]; // the latched target stands on a support about a boot wide or narrower
     public readonly float[] FootLift = [float.NaN, float.NaN]; // world Y each foot is carried to, NaN when it was not placed last frame
     public readonly Vector3[] LastAnkle = [new(float.NaN), new(float.NaN)]; // world, the animated ankle last frame
+    public float BodyY = float.NaN; // world height of the origin plus our drop, last frame the feet were placed
     public Vector3 BodyShift;      // model space
     public float Lean;             // radians
     public float BumpAge = float.PositiveInfinity; // seconds since this body was last bumped

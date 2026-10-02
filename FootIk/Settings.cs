@@ -15,13 +15,14 @@ public enum Where
     [Description("In game and group pose")] Both,
 }
 
-// Who the mod works on besides you, widest first.
+// Who the mod works on besides you, widest first. Saved as a number, so a new choice goes at the end.
 public enum Who
 {
-    [Description("Everyone")] Everyone,
-    [Description("Other players")] Players,
+    [Description("All players and NPCs")] Everyone,
+    [Description("All players")] Players,
     [Description("Friends and party")] FriendsAndParty,
     [Description("Party only")] Party,
+    [Description("Friends only")] Friends,
 }
 
 // Fields ending in Frac are fractions of the bind-pose leg length, so races of every size behave alike.
@@ -39,7 +40,7 @@ public sealed class Settings : IPluginConfiguration
     public bool ShowRuler;
     public float BlendSeconds = 0.15f;
     public float PelvisTau = 0.08f;
-    public float StrideTau = 0.25f; // body smoothing at a run, where it follows the ground under itself; 0 keeps the standing rule at every speed
+    public float StrideTau = 0.15f; // body smoothing at a run, where it follows the ground under itself; 0 keeps the standing rule at every speed
     public float FootTau = 0.03f; // also sets how far ahead a moving foot looks for a step; 0 turns both off
 
     public float MaxDropFrac = 0.40f;
@@ -72,7 +73,6 @@ public sealed class Settings : IPluginConfiguration
     public float GatherForward = 0.7f;
     public float MaxPelvisRaiseFrac = 0.3f;
 
-    public bool MoveWeapons = true; // carried weapons follow the bones we turn, instead of staying where the animation left them
     public bool SlopeLean;
     public float LeanUphillGain = 0.5f;
     public float LeanDownhillGain = 1.0f; // hunched races (Hrothgar) want a weak uphill lean but a strong downhill one

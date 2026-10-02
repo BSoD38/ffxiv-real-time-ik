@@ -13,7 +13,7 @@ Product decisions that bound the design space (do not re-litigate):
 - **Distribution: self-hosted third-party repo**, csproj as the manifest. DalamudPluginsD17 review constraints are not binding.
 - **Never crash, at any cost in features.** Compatibility with CustomizePlus / SimpleHeels / Brio is a lower priority than not taking the client down.
 
-Milestone state (2026-09-12): M0–M4 and M5b done and in-game verified. M5 (stairs/ledges) partial — three probes per foot, median height; the slope sink is open and has a `SlopeLift` interim knob. M6 (sitting/emotes) is written and awaits in-game verification: `EmoteLoop` opens the gate, ground sit and sleep (`InPositionLoop`, `ModeParam` 1 and 3) tilt the whole pose to the ground plane. M7 (other characters + release) is not started. M8 (render-mesh raycasting, experimental) is a hybrid in `Plugin.Mesh.cs`, in-game verified 2026-09-12, off by default: collision gates, the render mesh refines the height within a band. M10 (bumping into people, a torso flinch when the local player runs into a character) is in-game verified 2026-09-12, off by default; M10b carries sheathed weapons along with every torso turn, verified the same day, on by default.
+Milestone state (2026-09-12): M0–M4 and M5b done and in-game verified. M5 (stairs/ledges) partial — three probes per foot, median height; the slope sink is open and has a `SlopeLift` interim knob. M6 (sitting/emotes) is written and awaits in-game verification: `EmoteLoop` opens the gate, ground sit and sleep (`InPositionLoop`, `ModeParam` 1 and 3) tilt the whole pose to the ground plane. M7 (other characters + release) is not started. M8 (render-mesh raycasting, experimental) is a hybrid in `Ground/Mesh.cs`, in-game verified 2026-09-12, off by default: collision gates, the render mesh refines the height within a band. M10 (bumping into people, a torso flinch when the local player runs into a character) is in-game verified 2026-09-12, off by default; M10b carries sheathed weapons along with every torso turn, verified the same day, always on.
 
 Load-bearing invariants:
 
@@ -36,28 +36,30 @@ Load-bearing invariants:
 
 ## Architecture
 
-Single project, single namespace. One `partial class Plugin` split by concern, plus pure helpers:
+Single project, single namespace. One `partial class Plugin` split by concern across folders, plus pure helpers:
 
 ```
-FootIk/FootIk.csproj      # Sdk="Dalamud.NET.Sdk/15.0.0"; the csproj IS the manifest
-FootIk/Plugin.cs          # services, both hook signatures + install, detours, fault breaker,
-                          #   ApplyPelvis (draw offset / movement hook), lifecycle
-FootIk/Plugin.Dispatch.cs # who gets ticked: local player, object-table sweep, eligibility, retirement
-FootIk/Plugin.Tick.cs     # the per-frame pass: a ref struct Frame threaded through named steps
-FootIk/Plugin.Gather.cs   # GatherFeet and its search: sampling, picking, holding, recentring
-FootIk/Plugin.Bones.cs    # ResolvePose (the guard chain), SolveLeg, ApplySpineLean, RotateBody, weapon anchors
-FootIk/Plugin.Probes.cs   # Raycast (explicit layer/material filter), TrySupport, GroundAt
-FootIk/Plugin.Mesh.cs     # experimental: render-mesh ground height (layout scan, Lumina model cache, XZ grid, RefineByMesh)
-FootIk/Solver.cs          # pure math: Xf, Compose/Relative, FromTo, TwoBone, Pick, SelfTest
-FootIk/LegChain.cs        # bone lookup by name, subtrees, bind-pose rest / leg length / forward,
-                          #   Havok transform read/write
-FootIk/Settings.cs        # all tunables; IPluginConfiguration, saved when a widget edit completes
-FootIk/Snapshot.cs        # per-frame readouts, written once per tick, read on the draw thread
-FootIk/Overlay.cs         # /ik window as a KamiToolKit NativeAddon: tab bar, scrolling body, widget builders + ImGui world markers
-docs/PLAN.md              # the source of truth for research, offsets and milestones
+FootIk/FootIk.csproj         # Sdk="Dalamud.NET.Sdk/15.0.0"; the csproj IS the manifest
+FootIk/Plugin.cs             # services, both hook signatures + install, detours, fault breaker,
+                             #   ApplyPelvis (draw offset / movement hook), lifecycle
+FootIk/Settings.cs           # all tunables; IPluginConfiguration, saved when a widget edit completes
+FootIk/Pipeline/Dispatch.cs  # who gets ticked: local player, object-table sweep, eligibility, retirement
+FootIk/Pipeline/Tick.cs      # the per-frame pass: a ref struct Frame threaded through named steps
+FootIk/Pipeline/CharState.cs # per-character mutable state, keyed by address in Plugin.states
+FootIk/Ground/Probes.cs      # Raycast (explicit layer/material filter), TrySupport, GroundAt
+FootIk/Ground/Gather.cs      # GatherFeet and its search: sampling, picking, holding, recentring
+FootIk/Ground/Mesh.cs        # experimental: render-mesh ground height (layout scan, Lumina model cache, XZ grid, RefineByMesh)
+FootIk/Skeleton/Pose.cs      # ResolvePose (the guard chain), SolveLeg, ApplySpineLean, RotateBody, weapon anchors
+FootIk/Skeleton/LegChain.cs  # bone lookup by name (the Bones helpers), subtrees, bind-pose rest / leg length / forward,
+                             #   Havok transform read/write
+FootIk/Skeleton/Solver.cs    # pure math: Xf, Compose/Relative, FromTo, TwoBone, Pick, SelfTest
+FootIk/Audio/Grunt.cs        # bump grunts and the shove sound, played from Framework.Update, never from the detour
+FootIk/Ui/Overlay.cs         # /ik window as a KamiToolKit NativeAddon: tab bar, scrolling body, widget builders + ImGui world markers
+FootIk/Ui/Snapshot.cs        # per-frame readouts, written once per tick, read on the draw thread
+docs/PLAN.md                 # the source of truth for research, offsets and milestones
 ```
 
-Per-frame pipeline in `Plugin.Tick.cs` (`TickOne`), reached once per character from `Plugin.Dispatch.cs`:
+Per-frame pipeline in `Pipeline/Tick.cs` (`TickOne`), reached once per character from `Pipeline/Dispatch.cs`:
 
 ```
 gate (Mode / jump / conditions / GPose) → ResolvePose → ReadTransform → AnchorWeapons → FindBump
@@ -65,7 +67,7 @@ gate (Mode / jump / conditions / GPose) → ResolvePose → ReadTransform → An
   → ApplyPelvis → PlaceFoot → LeanSpine → ShoveTorso → TiltBody → CarryWeapons
 ```
 
-Dependency direction: `Dispatch` picks the characters and `TickOne` orchestrates each, and every game-memory read in it (character fields, skeleton transform, bone translations via `Bones.Pos`) sits behind `ResolvePose` or the local-player check; `Bones`/`Probes` own the pointer walks, pose writes and raycasts; `Solver` and `LegChain` are pure and hold no plugin state; `Overlay` reads `Snap` and `Settings` and owns nothing.
+Dependency direction: `Dispatch` picks the characters and `TickOne` orchestrates each, and every game-memory read in it (character fields, skeleton transform, bone translations via `Bones.Pos`) sits behind `ResolvePose` or the local-player check; `Pose`/`Probes` own the pointer walks, pose writes and raycasts; `Solver` and `LegChain` are pure and hold no plugin state; `Overlay` reads `Snap` and `Settings` and owns nothing.
 
 ### Manifest rule (critical)
 
@@ -73,7 +75,7 @@ The csproj **is** the plugin manifest (Name, Punchline, Description, Tags…). *
 
 ## Coding Standards
 
-- **File-scoped namespace, single root namespace `FootIk`**, no folders.
+- **File-scoped namespace, single root namespace `FootIk`** in every folder: folders sort files, they do not make namespaces. A `Plugin` partial is named for its concern alone (`Tick.cs`, not `Plugin.Tick.cs`), and never after a type it does not hold (the pose partial is `Pose.cs` because `Bones` is the helper class in `LegChain.cs`).
 - **`this.` on every instance member access**, braces on every block including one-line `if`s. The codebase is uniform on this; keep it.
 - **The column alignment of the `[PluginService]` block in `Plugin.cs` is deliberate.** It is the only thing `dotnet format` disputes in the whole project (16 WHITESPACE errors, lines 30–38, all in that block). Do not let a blanket format pass collapse it, and do not "fix" those errors.
 - **Explicit usings**, ordered System → Dalamud → FFXIVClientStructs. No global usings.

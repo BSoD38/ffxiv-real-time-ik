@@ -50,7 +50,6 @@ public sealed unsafe partial class Plugin : IAsyncDalamudPlugin
     public string? LastError { get; private set; }
     public double LastMicros { get; private set; }
     public string? LastBump { get; private set; }
-    public double MaxMicros { get; private set; }
     public int Tracked { get; private set; }
     public Snapshot Snap;
 
@@ -243,7 +242,6 @@ public sealed unsafe partial class Plugin : IAsyncDalamudPlugin
         }
 
         this.LastMicros = (this.clock.Elapsed.TotalMilliseconds - t0) * 1000.0;
-        this.MaxMicros = Math.Max(this.MaxMicros, this.LastMicros);
     }
 
     // Horizontal needs the movement hook: the game only honours the Y of the draw offset.
