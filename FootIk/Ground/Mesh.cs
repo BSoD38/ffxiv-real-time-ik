@@ -422,8 +422,10 @@ public sealed unsafe partial class Plugin
         {
             this.worker?.Wait(TimeSpan.FromSeconds(2));
         }
-        catch (Exception)
+        catch (AggregateException ex)
         {
+            // Keeps plugin teardown from ending early.
+            Log.Warning(ex, "FootIk: mesh worker faulted");
         }
     }
 
