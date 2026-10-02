@@ -8,20 +8,10 @@ using FFXIVClientStructs.FFXIV.Client.Sound;
 
 namespace FootIk;
 
-// The damage grunt of whoever was shoved, asked of the character rather than built here: LoadCharacterSound picks the
-// voice off the container it is called on, which carries the id chosen at creation, so nothing here knows or needs to
-// know a character's race, sex, language or voice.
-//
-// The argument shape is the game's own, captured from its call on fall damage: every argument but the sound id is
-// zero. That id is NOT the group number PlaySound takes - the game plays 29 for the grunt and 26 for the landing
-// thud, both confirmed by ear, while 1 is PlaySound's damage group and silent here. Passing 1 is what made a first
-// attempt look as though this function only loaded and never played, and sent the whole thing down a blind alley:
-// reading the race's own voice file by path, which cost a nine-code race table, a two-bank guess and a learned map of
-// voice to bank, and still could not reach more than two of the twelve creation voices. All of it deleted with this.
-//
-// Never called from the render detour. A foreign call on a pointer we had misidentified once took the client down,
-// and an access violation is not catchable in .NET, so the detour only records who should grunt and the call happens
-// here on the framework thread. Both run on the game main thread, so the queue needs no synchronisation.
+// LoadCharacterSound picks the voice off the container it is called on: no race or voice table. Arguments copy the
+// game's fall-damage call; 29 is the grunt (26 the landing thud), not PlaySound's group 1, which is silent here.
+// Never from the render detour: a foreign call on a bad pointer is an uncatchable AV, so the detour queues and the
+// framework thread plays. Both are the game main thread, so the queue needs no synchronisation.
 public sealed unsafe partial class Plugin
 {
     private const int DamageGrunt = 29;
@@ -40,10 +30,8 @@ public sealed unsafe partial class Plugin
 
     private bool gruntTripped;
 
-    // PlaySound resolves a game path, never a file, so the shipped container sits behind a path of our own through a
-    // Penumbra temporary mod. It is a battle-voice container with the game's audio cut off and its damage group's four
-    // takes pointed at our four clips, so group 1 rolls between them itself, at equal weights. Its sound entries were moved
-    // from the voice bus to the sound-effects bus (byte 1 of each entry is the SoundBus).
+    // PlaySound takes a game path, so a Penumbra temp mod maps ours to the shipped SCD: a battle-voice container whose
+    // group 1 rolls our four clips, its entries moved to the sound-effects bus (byte 1 of each entry is the SoundBus).
     private const string ShoveSoundPath = "sound/vfx/footik/shove.scd";
     private const string ShoveSoundTag = "FootIk.ShoveSound";
     private const uint ShoveSoundGroup = 1;
@@ -113,8 +101,7 @@ public sealed unsafe partial class Plugin
         }
     }
 
-    // The allocator reuses character addresses, so the queued one is believed only while the object table still agrees
-    // it holds that spawn; a character with nothing drawn has no voice to play.
+    // Believed only while the object table still holds that spawn at that address.
     private void Grunt(nint addr, ulong id)
     {
         for (var i = 0; i < Objects.Length; i++)
@@ -131,11 +118,8 @@ public sealed unsafe partial class Plugin
                 return;
             }
 
-            // autoRelease is the one argument deliberately not the game's own. The game passes 0 because it keeps the
-            // SoundData* it gets back and frees it later; we drop ours on the floor, and passing 0 filled the mixer
-            // until the game's own sounds stopped playing (twice in game, 2026-09-14, once on each playback route).
-            // 1 hands that job to the engine. If it ever turns out to be ignored here, the other way is to keep the
-            // returned pointer and call SoundManager.ReleaseSoundData on it, which is what the game is doing.
+            // autoRelease 1, not the game's 0: the game frees the SoundData* it keeps, we drop ours, and 0 fills the
+            // mixer until game sounds stop. Fallback: keep it and call SoundManager.ReleaseSoundData.
             chr->Vfx.LoadCharacterSound(DamageGrunt, 0, nint.Zero, 1, 0, 0, 0);
             return;
         }

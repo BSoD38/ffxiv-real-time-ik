@@ -11,12 +11,7 @@ using Lumina.Models.Models;
 
 namespace FootIk;
 
-// Experimental: the ground height read off the visible level geometry. Collision still finds the ground and gates
-// everything; the render mesh only moves a hit collision already made, and only within a band of it. Within that band
-// the surface nearest the hit wins, a part that carries a collider (or the terrain) only on a tie: giving those priority
-// took the foot down to the terrain under a raised collider-less floor wherever the two came close. A staircase whose
-// ramp collision lives on a neighbouring part with no render mesh of its own is the only surface there and wins.
-// Skipping collider-less parts outright lost those stairs.
+// Experimental: collision finds the ground and gates everything; the render mesh only moves a hit within a band of it.
 public sealed unsafe partial class Plugin
 {
     private const float MeshCell = 1f; // metres: a property of the level, not of the character
@@ -24,17 +19,12 @@ public sealed unsafe partial class Plugin
     private const float MeshMaxWide = 4096f; // metres: bounds the coarse-grid inserts per triangle; nothing walkable has come close
     private const float MeshMaxSphere = 2500f; // metres: real floor parts have carried spheres of 2428 m; this only keeps out the sky
 
-    // Cell inserts within one part, 25x what a building has needed; soft, a build already queued still finishes. No
-    // budget over every part held: one was tried, checked at queue time against what had been built so far, and the
-    // first scan after enabling queues everything in range against zero, so it only ever refused the parts walked onto
-    // later, and with the floor under you unread the refine sank the foot to the terrain beneath. A whole zone read at
-    // once came to 4.6 M triangles and the client carried it.
+    // Cell inserts per part, 25x what a building has needed. No global budget: one starved the parts walked onto
+    // later, and the foot sank to the terrain under them.
     private const int MeshMaxInserts = 500_000;
 
-    // One placed object: its world-space triangles, three vertices each, bucketed on an XZ grid. Built once on the
-    // worker when it enters the radius and dropped when it leaves, so moving never rebuilds what is already there.
-    // Built is set on the main thread only, after the worker has handed the entry back, and the render thread reads it
-    // first; a giant tree was a single 16 ms build, which no per-frame budget could split.
+    // One placed object's world triangles on an XZ grid, built once on the worker (a giant tree took 16 ms). Built is
+    // set on the main thread after the worker hands the entry back.
     private sealed class MeshEntry
     {
         public nint Key;
@@ -53,29 +43,6 @@ public sealed unsafe partial class Plugin
         public Dictionary<long, List<int>> Wide = [];
     }
 
-    private struct Candidate
-    {
-        public float Dist = float.MaxValue;
-        public MeshEntry? Entry;
-        public int Tri;
-        public float Y;
-
-        public Candidate()
-        {
-        }
-
-        public void Offer(float dist, MeshEntry entry, int tri, float y)
-        {
-            if (dist < this.Dist)
-            {
-                this.Dist = dist;
-                this.Entry = entry;
-                this.Tri = tri;
-                this.Y = y;
-            }
-        }
-    }
-
     // Local-space triangles per model path; null when the file could not be read. Touched by the worker only, and
     // there is never more than one worker. Kept because the same stair model is placed hundreds of times.
     private readonly Dictionary<string, Vector3[]?> models = new(StringComparer.Ordinal);
@@ -90,7 +57,6 @@ public sealed unsafe partial class Plugin
     private uint meshTerritory;
     private double lastScan;
 
-    // What the Performance tab shows: how much is held, and the reason it switched itself off if it did.
     public string MeshStatus { get; private set; } = "off";
 
     // UiBuilder.Draw: the main thread, like the render detour. Only the layout scan and the hand-back run here; the
@@ -148,9 +114,8 @@ public sealed unsafe partial class Plugin
         }
         catch (Exception ex)
         {
-            // Managed faults only. A bad pointer in the layout walk never arrives here, because an access violation is
-            // not catchable, so every hop of that walk is null-checked instead and this is not what keeps it up.
-            // Switches itself off and says why; the setting is not saved, so it is back on next load.
+            // Managed faults only: an AV in the layout walk is not catchable, hence the null check on every hop. Switches
+            // itself off and says why; unsaved, so it is back on next load.
             this.Settings.MeshRefine = false;
             this.MeshStatus = $"error: {ex.Message}";
             Log.Error(ex, "FootIk: mesh scan failed");
@@ -237,8 +202,7 @@ public sealed unsafe partial class Plugin
         }
     }
 
-    // The address is the key and the allocator reuses addresses, so an entry whose placement moved is a different
-    // object, or the same one carried somewhere: either way its world triangles are stale and it is built again.
+    // An entry whose placement moved has stale world triangles, whichever object now holds the address: rebuilt.
     private void Track(nint key, Vector3 pos, Quaternion rot, Vector3 scale, bool solid, FFXIVClientStructs.STD.StdString* name)
     {
         if (!this.entries.TryGetValue(key, out var e) || e.Pos != pos || e.Rot != rot || e.Scale != scale)
@@ -316,10 +280,8 @@ public sealed unsafe partial class Plugin
             tris[i] = e.Pos + Vector3.Transform(e.Scale * local[i], e.Rot);
         }
 
-        // A non-finite vertex floors to int.MinValue, and a triangle kilometres wide covers millions of 1 m cells: either
-        // turned the bucketing into billions of inserts and hung the client once. Wide triangles go on the coarse grid
-        // instead, since real floor parts have triangles wider than 64 m, and beyond MeshMaxWide they are dropped. The
-        // width bounds one triangle's inserts, not the model's, so the running count stops a mesh of wide triangles.
+        // Non-finite or kilometre-wide triangles explode into billions of cell inserts: wide ones go on the coarse grid,
+        // past MeshMaxWide they drop, and the running count caps a model of many wide ones.
         e.MinX = e.MinZ = float.MaxValue;
         e.MaxX = e.MaxZ = float.MinValue;
         var cells = new Dictionary<long, List<int>>();
@@ -451,6 +413,7 @@ public sealed unsafe partial class Plugin
     }
 
     // The worker must not touch Dalamud services after they are gone; a parse in progress is given a moment to finish.
+    // A bounded block, at teardown only: the worker is a plain Task.Run with nothing to await on the framework thread.
     private void DisposeMesh()
     {
         this.meshStop = true;
@@ -465,25 +428,26 @@ public sealed unsafe partial class Plugin
     }
 
     // Swaps the collision hit's triangle for the render triangle under the same spot that is nearest it in height,
-    // within the band and never above the ray's start; a collider-bearing surface wins a tie. Everything downstream
-    // reads the triangle, so nothing else changes.
+    // within the band and never above the ray's start. A collider-bearing surface wins only a tie: priority sank feet
+    // through raised collider-less floors, and skipping collider-less parts lost stairs. Downstream reads the triangle.
     private void RefineByMesh(Vector3 origin, ref RaycastHit hit)
     {
         Vector3 p = hit.Point;
         var band = this.Settings.MeshBand;
-        var solid = new Candidate();
-        var loose = new Candidate();
+        (float Dist, MeshEntry? Entry, int Tri, float Y) solid = (float.MaxValue, null, 0, 0f), loose = solid;
         foreach (var e in this.entries.Values)
         {
             if (e.Built && p.X >= e.MinX && p.X <= e.MaxX && p.Z >= e.MinZ && p.Z <= e.MaxZ && TryNearest(e, p.X, p.Z, p.Y, band, origin.Y, out var tri, out var y))
             {
                 ref var best = ref (e.Solid ? ref solid : ref loose);
-                best.Offer(MathF.Abs(y - p.Y), e, tri, y);
+                var d = MathF.Abs(y - p.Y);
+                if (d < best.Dist)
+                {
+                    best = (d, e, tri, y);
+                }
             }
         }
 
-        // Nearest to the hit wins, a collider-bearing surface on a tie. Letting one win merely for being within reach took
-        // the foot down to the terrain under a raised collider-less floor wherever the two came close.
         var pick = loose.Dist < solid.Dist ? loose : solid;
         if (pick.Entry == null)
         {

@@ -3,7 +3,6 @@ using System.Numerics;
 
 namespace FootIk;
 
-// One per tracked character, held in Plugin.states and keyed by the character's address.
 internal sealed class CharState
 {
     public ulong Id;               // the spawn this state belongs to; the allocator reuses object addresses
@@ -14,6 +13,7 @@ internal sealed class CharState
     public float SmoothDrop;       // model units, negative = down
     public float SeenOffsetY;      // the game's DrawOffset.Y as found at the top of ApplyPelvis
     public float Written;          // the draw offset Y we hold, not the game's total
+    public Vector3 Hooked;         // what SimpleHeels' SetDrawOffset hook adds on top
     public Vector3 PelvisForMove;  // world offset added to the draw object in the movement hook
     public Vector3 MoveWritten;    // the part of it the draw object currently carries
     public Vector3 LastLogical;

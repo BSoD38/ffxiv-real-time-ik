@@ -60,66 +60,54 @@ public sealed unsafe partial class Plugin : IAsyncDalamudPlugin
     private readonly Stopwatch clock = Stopwatch.StartNew();
     private Overlay? overlay;
 
-    // Keyed by the character address, which the allocator reuses, so each state carries the spawn id it belongs to.
-    // Read from both detours; they run on the same thread, so no synchronisation.
+    // Both detours read this on the same thread, so no synchronisation.
     private readonly Dictionary<nint, CharState> states = [];
     private double lastTick;
 
     public Plugin()
     {
         this.Settings = LoadSettings();
-
-        try
-        {
-            if (!SigScanner.TryScanText(RenderSig, out var addr))
-            {
-                throw new InvalidOperationException("signature not found (game patched? refresh from CustomizePlus Constants.cs)");
-            }
-
-            this.renderHook = Interop.HookFromAddress<RenderDelegate>(addr, this.RenderDetour);
-            this.renderHook.Enable();
-            this.HookStatus = $"hooked RenderManager::Render at 0x{addr:X}";
-        }
-        catch (Exception ex)
-        {
-            this.renderHook?.Dispose();
-            this.renderHook = null;
-            this.HookStatus = $"failed: {ex.Message}";
-            Log.Error(ex, "FootIk: render hook unavailable, plugin inert");
-        }
-
-        try
-        {
-            if (!SigScanner.TryScanText(MoveSig, out var addr))
-            {
-                throw new InvalidOperationException("signature not found");
-            }
-
-            this.moveHook = Interop.HookFromAddress<MoveDelegate>(addr, this.MoveDetour);
-            this.moveHook.Enable();
-            this.MoveHookStatus = $"hooked UpdateVisualPosition at 0x{addr:X}";
-        }
-        catch (Exception ex)
-        {
-            this.moveHook?.Dispose();
-            this.moveHook = null;
-            this.MoveHookStatus = $"failed: {ex.Message}";
-            Log.Error(ex, "FootIk: movement hook unavailable, horizontal body offsets disabled");
-        }
+        this.renderHook = Install<RenderDelegate>(RenderSig, this.RenderDetour, "RenderManager::Render", out var renderStatus);
+        this.HookStatus = renderStatus;
+        this.moveHook = Install<MoveDelegate>(MoveSig, this.MoveDetour, "UpdateVisualPosition", out var moveStatus);
+        this.MoveHookStatus = moveStatus;
 
         PluginInterface.UiBuilder.Draw += this.UpdateMesh;
         Framework.Update += this.PlaySounds;
 
         // A wrong solver writes wrong-but-finite poses, which no guard downstream can catch: start inert instead.
         this.Tripped = this.SelfTest != "PASS";
+
+        // Only once both fields are set: each detour dereferences its own, and the constructor runs off the main thread.
+        this.moveHook?.Enable();
+        this.renderHook?.Enable();
         Log.Information("FootIk loaded. {Status}. {Move}. Solver self-test: {Test}", this.HookStatus, this.MoveHookStatus, this.SelfTest);
     }
 
     // The window waits on KamiToolKit loading its textures, and nothing in this class may await: `unsafe` forbids it.
     public Task LoadAsync(CancellationToken cancellationToken) => Overlay.InstallAsync(this, cancellationToken);
 
-    // Called back once the window can be built. The hooks have been live since the constructor; nothing on the tick
-    // path touches the window.
+    private static Hook<T>? Install<T>(string sig, T detour, string what, out string status) where T : Delegate
+    {
+        try
+        {
+            if (!SigScanner.TryScanText(sig, out var addr))
+            {
+                throw new InvalidOperationException("signature not found (game patched? refresh from CustomizePlus Constants.cs)");
+            }
+
+            var hook = Interop.HookFromAddress(addr, detour);
+            status = $"hooked {what} at 0x{addr:X}";
+            return hook;
+        }
+        catch (Exception ex)
+        {
+            status = $"failed: {ex.Message}";
+            Log.Error(ex, "FootIk: {What} hook unavailable", what);
+            return null;
+        }
+    }
+
     internal void AttachWindow(Overlay window)
     {
         this.overlay = window;
@@ -141,13 +129,11 @@ public sealed unsafe partial class Plugin : IAsyncDalamudPlugin
         Settings settings;
         try
         {
-            // Null when nothing is saved yet, and when the stored type no longer resolves: Dalamud writes the assembly
-            // name into the JSON, so renaming this assembly abandons the old file rather than failing loudly.
+            // Null if nothing is saved, or the assembly was renamed: Dalamud stores the type name.
             settings = PluginInterface.GetPluginConfig() as Settings ?? new Settings();
         }
         catch (Exception ex)
         {
-            // Better a loud default than a silent one: the user needs to know their settings are gone.
             Log.Error(ex, "Saved settings could not be read. Starting from defaults.");
             settings = new Settings();
         }
@@ -156,8 +142,6 @@ public sealed unsafe partial class Plugin : IAsyncDalamudPlugin
         return settings;
     }
 
-    // Called when a widget finishes an edit, not while one is being dragged: SavePluginConfig writes the file
-    // synchronously on the draw thread.
     public void SaveSettings()
     {
         try
@@ -176,8 +160,7 @@ public sealed unsafe partial class Plugin : IAsyncDalamudPlugin
         return this.renderHook!.Original(a1, a2, a3, a4);
     }
 
-    // Delta-only, like the draw offset: an offset re-added on top of itself every frame compounds until the character
-    // is thrown clear of the camera. What was added last frame comes off before Original sees the position.
+    // Delta-only: last frame's shift comes off before Original, or it compounds.
     private void MoveDetour(nint gameObject)
     {
         this.states.TryGetValue(gameObject, out var st);
@@ -221,7 +204,6 @@ public sealed unsafe partial class Plugin : IAsyncDalamudPlugin
         }
         catch (Exception ex)
         {
-            // Only managed failures land here; a bad pointer would take the client down, hence the guards in ResolvePose.
             this.Faults++;
             this.LastError = ex.Message;
             if (this.Faults >= 5)
@@ -252,26 +234,48 @@ public sealed unsafe partial class Plugin : IAsyncDalamudPlugin
             return;
         }
 
-        // The game clears DrawOffset whenever it moves a character, and a stair step is exactly that, so a write made
-        // only when our own target changes is never re-asserted. Read the field, take our last share off to see what
-        // else is in there, and put ours back on top - still only our own share, so SimpleHeels keeps its.
+        // The game clears DrawOffset whenever it moves a character: re-assert our share on top of the rest, every frame.
+        // Cleared, the field holds only what a hook adds.
         ref var off = ref chr->GameObject.DrawOffset;
         var held = off.Y;
         st.SeenOffsetY = held;
-        var others = MathF.Abs(held) < 1e-6f && st.Written != 0f ? 0f : held - st.Written;
+        var others = MathF.Abs(held - st.Hooked.Y) < 1e-6f && st.Written != 0f ? st.Hooked.Y : held - st.Written;
         var wanted = others + total.Y;
-        if (MathF.Abs(wanted - held) > 1e-6f)
+        if (MathF.Abs(wanted - held) <= 1e-6f || SetOffset(chr, st, new Vector3(off.X, wanted, off.Z)))
         {
-            chr->GameObject.SetDrawOffset(off.X, wanted, off.Z);
+            st.Written = total.Y;
         }
-
-        st.Written = total.Y;
 
         st.PelvisForMove = this.moveHook == null ? Vector3.Zero : new Vector3(total.X, 0f, total.Z);
     }
 
-    // Takes our own offsets back off every character we hold; the breaker path needs it too, a tripped Tick never
-    // reaching ApplyPelvis again. Walks the object table: an address we tracked last frame may have been freed since.
+    // SimpleHeels hooks SetDrawOffset and adds its heel to whatever it is given, so pass the heel less. False when the
+    // hook dropped the write; it keeps the value as its base anyway, so the old base goes back.
+    private static bool SetOffset(Character* chr, CharState st, Vector3 want)
+    {
+        Vector3 before = chr->GameObject.DrawOffset;
+        var pass = want - st.Hooked;
+        chr->GameObject.SetDrawOffset(pass.X, pass.Y, pass.Z);
+        Vector3 landed = chr->GameObject.DrawOffset;
+        if (landed == before)
+        {
+            var keep = before - st.Hooked;
+            chr->GameObject.SetDrawOffset(keep.X, keep.Y, keep.Z);
+            return false;
+        }
+
+        var added = landed - pass;
+        if (float.IsFinite(added.X + added.Y + added.Z) && Vector3.DistanceSquared(added, st.Hooked) >= 1e-8f)
+        {
+            st.Hooked = added;
+            pass = want - added;
+            chr->GameObject.SetDrawOffset(pass.X, pass.Y, pass.Z);
+        }
+
+        return true;
+    }
+
+    // Walks the object table, not states: a tracked address may have been freed.
     private void Release()
     {
         for (var i = 0; i < Objects.Length; i++)
@@ -284,8 +288,9 @@ public sealed unsafe partial class Plugin : IAsyncDalamudPlugin
 
             if (st.Written != 0f)
             {
-                ref var off = ref ((Character*)o.Address)->GameObject.DrawOffset;
-                ((Character*)o.Address)->GameObject.SetDrawOffset(off.X, off.Y - st.Written, off.Z);
+                var chr = (Character*)o.Address;
+                Vector3 off = chr->GameObject.DrawOffset;
+                SetOffset(chr, st, off with { Y = off.Y - st.Written });
             }
 
             if (st.MoveWritten != Vector3.Zero)
@@ -316,10 +321,7 @@ public sealed unsafe partial class Plugin : IAsyncDalamudPlugin
         return Overlay.ShutdownAsync(this, window);
     }
 
-    // Hooks come down before the offsets they would re-add, and the last of our own offsets comes off before the
-    // movement hook that carries the horizontal share. Unlike the old synchronous Dispose, this runs on the
-    // framework thread only because the caller puts it there: `Release` reads the object table, which throws
-    // anywhere else.
+    // Framework thread only: Release reads the object table. Each hook comes down before the offsets it would re-add.
     internal void Teardown()
     {
         this.renderHook?.Dispose();

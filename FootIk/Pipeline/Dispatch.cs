@@ -47,9 +47,7 @@ public sealed unsafe partial class Plugin
         var localAddr = lp?.Address ?? 0;
         if (localAddr != 0)
         {
-            var st = this.StateFor(localAddr, lp!.GameObjectId);
-            st.Seen = true;
-            this.TickOne((Character*)localAddr, st, dt, rawDt, local: true, retire: false, ref snap);
+            this.TickOne((Character*)localAddr, this.StateFor(localAddr, lp!.GameObjectId), dt, rawDt, local: true, retire: false, ref snap);
         }
 
         // The original is ticked as well: hidden, it costs rays and nothing else.
@@ -57,10 +55,8 @@ public sealed unsafe partial class Plugin
         this.posedAddr = posed?.Address ?? 0;
         if (posed != null)
         {
-            var st = this.StateFor(posed.Address, posed.GameObjectId);
-            st.Seen = true;
             snap = default;
-            this.TickOne((Character*)posed.Address, st, dt, rawDt, local: true, retire: false, ref snap);
+            this.TickOne((Character*)posed.Address, this.StateFor(posed.Address, posed.GameObjectId), dt, rawDt, local: true, retire: false, ref snap);
         }
 
         this.Snap = snap;
@@ -131,19 +127,15 @@ public sealed unsafe partial class Plugin
 
         for (var i = 0; i < n; i++)
         {
-            var st = this.StateFor(picked[i], ids[i]);
-            st.Seen = true;
             var other = default(Snapshot);
-            this.TickOne((Character*)picked[i], st, dt, rawDt, local: false, retire: false, ref other);
+            this.TickOne((Character*)picked[i], this.StateFor(picked[i], ids[i]), dt, rawDt, local: false, retire: false, ref other);
         }
 
         this.Tracked += n;
         this.Retire(picked[..n], localAddr, dt, rawDt);
     }
 
-    // A non-humanoid NPC holds a slot until its chain fails to resolve, so NPCs go off wholesale rather than one kind
-    // at a time. Party, alliance and friend come from the character's own relation byte (the one that draws the friend
-    // icon on a nameplate), so nothing depends on the player having opened a social window.
+    // StatusFlags is the nameplate relation byte: no social window has to have been opened.
     private static bool Eligible(IGameObject o, Who who)
     {
         if (who == Who.Everyone)
@@ -221,14 +213,14 @@ public sealed unsafe partial class Plugin
         {
             if (st.Id == id)
             {
+                st.Seen = true;
                 return st;
             }
 
-            // The allocator handed this address to a different spawn: nothing we tracked applies to the new one.
             this.states.Remove(address);
         }
 
-        st = new CharState { Id = id };
+        st = new CharState { Id = id, Seen = true };
         this.states[address] = st;
         return st;
     }

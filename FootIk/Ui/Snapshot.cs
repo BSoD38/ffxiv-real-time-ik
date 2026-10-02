@@ -27,7 +27,7 @@ public struct FootSnapshot
     public Vector3 HitNormal;
     public ulong Material;
     public float GroundModelY;
-    public float GroundTopY; // the highest probe under the sole, where GroundModelY is their median
+    public float GroundTopRise; // the highest probe under the sole over the median's plane, before any step-ahead; 0 once gathered
     public float AnkleAboveGround;
     public bool OverEdge;
     public bool Gathered;
@@ -76,6 +76,7 @@ public struct Snapshot
     public float Applied;
     public float OffsetSeen;
     public float OffsetWritten;
+    public float OffsetHooked;
     public Vector3 BodyShift;
     public FootSnapshot Left;
     public FootSnapshot Right;

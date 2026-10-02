@@ -22,17 +22,13 @@ public sealed unsafe partial class Plugin
         // the feet back to it. Not during emotes either: a dance stance gathered onto a rail reads wrong.
         if (!c.GatherFeet || f.Dirs == 0 || !snap.Gate || snap.Mode != CharacterModes.Normal)
         {
-            snap.Left.GatherBlock = Block.Off;
-            snap.Right.GatherBlock = Block.Off;
-            f.St.Latched[0] = false;
-            f.St.Latched[1] = false;
+            snap.Left.GatherBlock = snap.Right.GatherBlock = Block.Off;
+            Array.Clear(f.St.Latched);
             return;
         }
 
-        // A foot over a drop past Edge drop gathers, unless it is on an incline, where that is just where a slope puts a
-        // leading foot. A stride hangs one foot, never both, so two hanging feet gather whatever the ground below leans,
-        // and so does a foot over nothing. Ground within Edge drop is stood on, a stair tread included. `OnIncline`
-        // cannot tell a slope from a ledge, so it is asked only in motion; standing at an edge, the hit triangles decide.
+        // A foot past Edge drop gathers unless a slope explains it (OnIncline only in motion: it cannot tell a slope
+        // from a ledge). Two hanging feet, or one over nothing, always gather.
         var oneLow = snap.Left.OverEdge != snap.Right.OverEdge;
         var incline = oneLow && (Sloped(in snap.Left) || Sloped(in snap.Right) || (!f.Still && this.OnIncline(in f)));
         Span<bool> needs = stackalloc bool[2];
@@ -40,10 +36,8 @@ public sealed unsafe partial class Plugin
         needs[1] = !snap.Right.Hit || (snap.Right.OverEdge && !incline);
         if (!needs[0] && !needs[1])
         {
-            snap.Left.GatherBlock = Block.Settled;
-            snap.Right.GatherBlock = Block.Settled;
-            f.St.Latched[0] = false;
-            f.St.Latched[1] = false;
+            snap.Left.GatherBlock = snap.Right.GatherBlock = Block.Settled;
+            Array.Clear(f.St.Latched);
             return;
         }
 
@@ -181,10 +175,8 @@ public sealed unsafe partial class Plugin
         var shift = new Vector3(((stand[0].X + stand[1].X) * 0.5f) - centre.X, 0f, ((stand[0].Z + stand[1].Z) * 0.5f) - centre.Z).Length();
         if (!(spread <= c.MaxStanceFrac * legWorld && shift <= c.MaxBodyShiftFrac * legWorld))
         {
-            snap.Left.GatherBlock = Block.TooFar;
-            snap.Right.GatherBlock = Block.TooFar;
-            f.St.Latched[0] = false;
-            f.St.Latched[1] = false;
+            snap.Left.GatherBlock = snap.Right.GatherBlock = Block.TooFar;
+            Array.Clear(f.St.Latched);
             return;
         }
 
@@ -215,6 +207,7 @@ public sealed unsafe partial class Plugin
             foot.HitPoint = support.Point;
             foot.Material = support.Material;
             foot.GroundModelY = (GroundAt(in support, target[s].X, target[s].Z, out foot.HitNormal) - f.OriginY) / f.Scale.Y;
+            foot.GroundTopRise = 0f;
             // A sole across a rail rests level: on a rounded or diamond rail the facet under one point is not what it stands on.
             if (narrow[s])
             {

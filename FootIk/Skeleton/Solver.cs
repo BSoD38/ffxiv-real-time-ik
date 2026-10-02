@@ -124,8 +124,7 @@ public static class Solver
         return true;
     }
 
-    // Height of the plane through a hit triangle at (x, z), plus its upward normal. A degenerate triangle reports a zero
-    // normal: RaycastHit.Normal reads zero in game, so there is nothing to fall back to.
+    // Height of the plane through a hit triangle at (x, z), plus its upward normal; zero for a degenerate triangle.
     public static float PlaneHeight(Vector3 v1, Vector3 v2, Vector3 v3, Vector3 hp, float x, float z, out Vector3 normal)
     {
         var tri = Vector3.Cross(v2 - v1, v3 - v1);

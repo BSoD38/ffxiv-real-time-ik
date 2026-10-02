@@ -103,20 +103,14 @@ public unsafe struct LegChain
                 case "j_sebo_b": chain.SpineB = i; continue;
                 case "j_sebo_c": chain.SpineC = i; continue;
                 case "j_kubi": chain.Neck = i; continue;
-            }
-
-            if (name is "j_ude_a_l" or "j_ude_b_l" or "j_te_l" or "j_naka_a_l" or "j_ude_a_r" or "j_ude_b_r" or "j_te_r" or "j_naka_a_r")
-            {
-                ref var arm = ref (name[^1] == 'l' ? ref chain.LeftArm : ref chain.RightArm);
-                switch (name)
-                {
-                    case "j_ude_a_l" or "j_ude_a_r": arm.Hip = i; break;
-                    case "j_ude_b_l" or "j_ude_b_r": arm.Knee = i; break;
-                    case "j_te_l" or "j_te_r": arm.Ankle = i; break;
-                    default: arm.Toes = i; break;
-                }
-
-                continue;
+                case "j_ude_a_l": chain.LeftArm.Hip = i; continue;
+                case "j_ude_b_l": chain.LeftArm.Knee = i; continue;
+                case "j_te_l": chain.LeftArm.Ankle = i; continue;
+                case "j_naka_a_l": chain.LeftArm.Toes = i; continue;
+                case "j_ude_a_r": chain.RightArm.Hip = i; continue;
+                case "j_ude_b_r": chain.RightArm.Knee = i; continue;
+                case "j_te_r": chain.RightArm.Ankle = i; continue;
+                case "j_naka_a_r": chain.RightArm.Toes = i; continue;
             }
 
             if (name.Length != 9 || !name.StartsWith("j_asi_", StringComparison.Ordinal))

@@ -58,8 +58,7 @@ public sealed unsafe partial class Plugin
 
     private enum Ground
     {
-        None,
-        TooLow,
+        None, // nothing in the window, or too far down
         TooHigh, // a ledge the foot cannot be placed on, and cannot pass through either
         Standable,
     }
@@ -87,7 +86,7 @@ public sealed unsafe partial class Plugin
 
         gy = ((y - f.OriginY) / f.Scale.Y) - f.BaseY;
         return gy > f.MaxStep ? Ground.TooHigh
-            : gy < -f.MaxStepDown ? Ground.TooLow
+            : gy < -f.MaxStepDown ? Ground.None
             : Ground.Standable;
     }
 

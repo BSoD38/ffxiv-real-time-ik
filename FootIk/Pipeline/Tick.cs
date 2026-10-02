@@ -11,8 +11,6 @@ using FFXIVClientStructs.Havok.Common.Base.Math.QsTransform;
 
 namespace FootIk;
 
-// Model-space heights are relative to the character origin, except during an emote, where step thresholds and the probe
-// window are judged from the ground under the body instead (Frame.BaseY): root motion can carry it far from the origin.
 public sealed unsafe partial class Plugin
 {
     private ref struct Frame
@@ -47,16 +45,11 @@ public sealed unsafe partial class Plugin
         public float GatherWant;
     }
 
-    // Cached: Span.Sort takes a delegate, and a lambda written at the call site would allocate one per frame per foot.
-    private static readonly Comparison<RaycastHit> ByHeight = (a, b) => a.Point.Y.CompareTo(b.Point.Y);
-
     private const float StillSpeed = 0.15f; // m/s, not a *Frac: every race moves at the same world speed.
     private const float RunSpeed = 6f;      // m/s, a flat-out run on foot
     private const float WarpSpeed = 30f;    // m/s: faster than any mount, so a step this large is a teleport, not travel
 
-    // Where a body near us stood when we last looked. Being run into needs the other one's speed, and the game keeps
-    // none we can read - MoveController carries only MovementState - so it is measured here rather than taken from a
-    // CharState, which only characters the plugin is already working on have.
+    // Speed of bodies we may not be ticking: the game exposes none (MoveController carries only MovementState).
     private struct Neighbour
     {
         public ulong Id;
@@ -78,9 +71,7 @@ public sealed unsafe partial class Plugin
     // off a standing midlander; every race is within a few centimetres of it once scaled by the leg.
     private const float ShoulderOverLeg = 1.45f;
 
-    // What runs into someone is the shoulder line, not the point on the floor between the feet: it leads by most of a
-    // foot when the body leans into a run, and swings across when it turns. Falls back to a height up the origin for a
-    // skeleton with no arms (a carbuncle-shaped model can reach this).
+    // Bumps meet at the shoulders, not the feet; a skeleton with no arms uses ShoulderOverLeg.
     private static Vector3 ShoulderMid(in Frame f)
     {
         ref readonly var ch = ref f.St.Chain;
@@ -168,8 +159,7 @@ public sealed unsafe partial class Plugin
         {
             this.ReadTransform(chr, ref f);
             f.Weapons = active ? anchors[..AnchorWeapons(chr, skel, pose, anchors)] : Span<WeaponAnchor>.Empty;
-            // Written here rather than under the gate: the overlay draws the ruler from these, and a snapshot is blank
-            // every tick, so leaving them to the gated path puts the ruler at the world origin whenever it is shut.
+            // Outside the gate: the ruler reads these while it is shut.
             snap.Yaw = f.Yaw;
             snap.Ground = new Vector3(f.PosAnchor.X, f.OriginY, f.PosAnchor.Z);
             var hips = (Bones.Pos(in f.Bones[st.Chain.Left.Hip]).Y + Bones.Pos(in f.Bones[st.Chain.Right.Hip]).Y) * 0.5f;
@@ -249,6 +239,7 @@ public sealed unsafe partial class Plugin
         this.ApplyPelvis(chr, st, new Vector3(bodyWorld.X, applied, bodyWorld.Z));
         snap.OffsetSeen = st.SeenOffsetY;
         snap.OffsetWritten = st.Written;
+        snap.OffsetHooked = st.Hooked.Y;
 
         if (active && st.Blend > 0)
         {
@@ -291,8 +282,9 @@ public sealed unsafe partial class Plugin
 
         // Probes are cast from where the animation puts the feet without our own offsets, or moving the body would undo
         // itself. Horizontally that is the logical position; vertically it keeps the game's visual offsets and drops ours.
+        // A heel lift drops too: to the legs it is higher ground, not a body to sink.
         Vector3 logical = chr->GameObject.Position;
-        f.PosAnchor = new Vector3(logical.X, f.Pos.Y - f.St.Written, logical.Z);
+        f.PosAnchor = new Vector3(logical.X, f.Pos.Y - f.St.Written - f.St.Hooked.Y, logical.Z);
         f.OriginY = f.PosAnchor.Y;
         f.Bones = f.Pose->ModelPose.Data;
 
@@ -392,8 +384,7 @@ public sealed unsafe partial class Plugin
 
     // Three probes along the sole, cast from character height so a foot against a riser does not see the step top; the
     // median keeps it on the tread it mostly stands on and lets a toe clip the next riser, as the base game does.
-    // Tried and reverted: highest hit wins (floats the foot), and preferring flat hits over ramps.
-    // tread, and preferring flat hits over ramps does not help on the bevelled stairs most of the game is built from.
+    // Tried and reverted: highest hit wins (floats the foot), and preferring flat hits over ramps (bevelled stairs).
     private void ProbeFoot(ref Frame f, int s, ref FootSnapshot foot)
     {
         var side = f.St.Chain.Side(s);
@@ -432,23 +423,21 @@ public sealed unsafe partial class Plugin
         }
 
         // Three hits give the median, two give the lower (never float over a void edge).
-        cand[..n].Sort(ByHeight);
+        cand[..n].Sort((a, b) => a.Point.Y.CompareTo(b.Point.Y));
         var chosen = n == 3 ? cand[1] : cand[0];
-        foot.GroundTopY = (cand[n - 1].Point.Y - f.OriginY) / f.Scale.Y;
 
         foot.HitPoint = chosen.Point;
         foot.Material = chosen.Material;
 
         // Evaluated at the ankle's XZ rather than at the winning probe: on a slope the mid-foot probe is half a foot away.
-        var ground = GroundAt(in chosen, foot.AnkleWorld.X, foot.AnkleWorld.Z, out foot.HitNormal) + this.StepAhead(in f, in foot, in chosen, travel);
-        foot.GroundModelY = (ground - f.OriginY) / f.Scale.Y;
+        var plane = GroundAt(in chosen, foot.AnkleWorld.X, foot.AnkleWorld.Z, out foot.HitNormal);
+        foot.GroundTopRise = (cand[n - 1].Point.Y - plane) / f.Scale.Y;
+        foot.GroundModelY = (plane + this.StepAhead(in f, in foot, in chosen, travel) - f.OriginY) / f.Scale.Y;
         foot.OverEdge = foot.GroundModelY - f.BaseY < -f.MaxStepDown;
     }
 
-    // How far the ground rises in a step, over and above the plane under the foot, where a moving foot will be three
-    // Foot smoothing times from now. The smoothing lags a foot at swing speed by most of a tread, so a rise has to be
-    // seen coming or the foot reaches the edge still low. A slope matches its own plane and gets nothing; so does a
-    // planted foot, which is not travelling; a drop is left to the smoothing, a foot floating past an edge being harmless.
+    // Rise above the plane under the foot where a moving foot will be in 3 FootTau, so the smoothing does not reach a
+    // step edge still low. Slopes, planted feet and drops get nothing.
     private float StepAhead(in Frame f, in FootSnapshot foot, in RaycastHit under, Vector3 travel)
     {
         var lead = 3f * this.Settings.FootTau;
@@ -605,14 +594,9 @@ public sealed unsafe partial class Plugin
         ref var shift = ref f.St.GatherShift[s];
         shift = Toward(shift, desired, Ease(f.Dt, desired.LengthSquared() > shift.LengthSquared() ? c.GatherTauIn : c.GatherTauOut));
         foot.GatherShift = shift;
-        if (!foot.Hit)
-        {
-            return;
-        }
 
+        // Reach is measured with or without ground: PlaceFoot clamps every foot to it.
         var anklePlaced = foot.AnkleModel + shift + foot.WallShift;
-        foot.AnkleAboveGround = foot.AnkleModel.Y - foot.GroundModelY;
-
         var a = Bones.Pos(in f.Bones[side.Hip]);
         var b = Bones.Pos(in f.Bones[side.Knee]);
         var v = anklePlaced - a;
@@ -626,7 +610,12 @@ public sealed unsafe partial class Plugin
         var interior = (180f - c.MaxKneeBendDeg) * MathF.PI / 180f;
         var dMin2 = l1 * l1 + l2 * l2 - (2f * l1 * l2 * MathF.Cos(interior));
         foot.MaxRaiseByKnee = MathF.Max(0f, -v.Y - MathF.Sqrt(MathF.Max(0f, dMin2 - vxz2)));
+        if (!foot.Hit)
+        {
+            return;
+        }
 
+        foot.AnkleAboveGround = foot.AnkleModel.Y - foot.GroundModelY;
         if (foot.Planted > 0)
         {
             // Where the terrain under this foot asks the body to sit.
@@ -668,13 +657,11 @@ public sealed unsafe partial class Plugin
             }
             else
             {
-                // At a run the foot behind the body only keeps clear of the higher tread behind it, running down:
-                // carrying its whole kick over that tread throws the leg up. Clear is the lower of ankle and toes over
-                // the highest ground under the sole, because a kick points the toes down. A foot still on its tread
-                // has no clearance to give up, so it stays on it.
+                // At a run a trailing foot only keeps clear of the tread behind it, by the lower of ankle and toes
+                // (a kick points the toes down); a foot still on its tread stays on it.
                 var side = f.St.Chain.Side(s);
                 var toes = Bones.Pos(in f.Bones[side.Toes]).Y - side.ToeRestBind - (c.RestAdjustFrac * f.LegLen);
-                var margin = MathF.Min(MathF.Max(0f, foot.AnkleModel.Y - foot.Rest), toes) - (foot.GroundTopY - foot.GroundModelY);
+                var margin = MathF.Min(MathF.Max(0f, foot.AnkleModel.Y - foot.Rest), toes) - foot.GroundTopRise;
                 var raise = offset + ((MathF.Max(0f, offset - margin) - offset) * Trailing(in f, in foot));
                 grounded = offset > 1e-5f ? Math.Clamp(raise / offset, 0f, 1f) : 1f;
                 offset = MathF.Min(raise, MathF.Min(f.MaxRaise, foot.MaxRaiseByKnee));
@@ -744,11 +731,8 @@ public sealed unsafe partial class Plugin
         return Math.Clamp(behind / (0.25f * f.LegLen * f.Scale.Y), 0f, 1f) * f.Stride;
     }
 
-    // The ground under a moving foot is a step function on stairs: the probes cross a tread edge in one frame and the
-    // foot would jump a whole riser. Eased in world space, so a planted foot keeps a still target however the origin
-    // climbs a collision ramp or the body settles; only a change of ground under the foot is spread out. The share of
-    // the foot riding with the body is carried by the body's climb first: eased in world space too, a foot in the air
-    // trails below a body running up a staircase and stretches the leg.
+    // Stair ground is a step function: eased in world space, a tread edge does not jump the foot a riser, and a planted
+    // foot holds still while the origin climbs. The share riding with the body follows its climb first, or it trails.
     private float EaseLift(in Frame f, int s, float offset, float applied, float grounded)
     {
         ref var lift = ref f.St.FootLift[s];
@@ -842,19 +826,12 @@ public sealed unsafe partial class Plugin
         }
     }
 
-    // Characters have no collision with each other, so this is our own: centres a bump radius apart on the same
-    // floor, closing faster than a nudge. The one moving takes the push and the one it ran into takes the opposite, so
-    // running into someone and being run into both land. Every ticked character scans, not just the local player, which
-    // is what lets someone else shove you; a character slower than the threshold leaves before the scan, so a crowd
-    // standing still costs nothing. Two cooldowns: one between any two bumps, a longer one before the same character
-    // counts again.
+    // Our own character collision: torsos a bump radius apart, closing faster than BumpMinSpeed, and both sides take
+    // the push. Only you scan while standing still, so an idle crowd costs nothing.
     private void FindBump(Character* chr, ref Frame f, bool local)
     {
         var c = this.Settings;
         var st = f.St;
-
-        // Only you are worth scanning for while standing still: a bystander who has to be moving anyway costs nothing
-        // when the crowd is idle, and that early return is the whole bound on what this walk costs in a plaza.
         var shoved = local && c.Shoved;
         if (st.BumpAge < c.BumpCooldown || (f.Speed < c.BumpMinSpeed && !shoved))
         {
@@ -870,7 +847,6 @@ public sealed unsafe partial class Plugin
         // Speed off the logical position, not off the shoulder: the torso swings with every stride, and differentiating
         // that reads as a metre a second of noise while standing still.
         var vel = f.VelDir * f.Speed;
-        // Indexed rather than enumerated: IObjectTable.GetEnumerator returns the interface, which allocates per frame.
         // Only the world's own slots: everything from PosedFirst on is a copy or a UI actor, never a body to run into.
         for (var i = 0; i < Math.Min(Objects.Length, PosedFirst); i++)
         {
@@ -933,10 +909,8 @@ public sealed unsafe partial class Plugin
                 continue;
             }
 
-            // Their speed counts as well as ours, so being run into while standing still lands exactly as running into
-            // them does. Gated on the whole relative speed and merely on the gap shrinking, not on the speed along the
-            // line between them: measured where the bodies first touch, that component is near zero for anything but a
-            // head-on hit, so shoulder-to-shoulder passes at a full run were dropped.
+            // Relative speed, gated on the gap shrinking at all: the component along the line is near zero at first
+            // touch for anything but a head-on hit.
             var dir = to / MathF.Sqrt(d2);
             var rel = vel - theirVel;
             rel.Y = 0f;
@@ -953,12 +927,8 @@ public sealed unsafe partial class Plugin
                 continue;
             }
 
-            // A body under two fifths of the other's height hits it below the hips and leaves its torso alone; from
-            // seven tenths up it hits in full. So a Lalafell shoves a Roegadyn's knees and takes the whole shove
-            // itself, while everyone else moves a Hrothgar fully: with the line at half height the tallest races
-            // barely flinched against anyone (seen in game).
-            // A bump landing while the last still plays rises from where that one stands, so the angle never drops
-            // to zero and pops back up. The direction does snap, as a second hit from another side would.
+            // Under 0.4 of the other's height hits below the hips and spares its torso; full from 0.7. A bump during a
+            // bump rises from the current angle rather than dropping to zero.
             var rise = MathF.Max(c.BumpRiseSeconds, 1e-3f);
             st.BumpTarget = o.GameObjectId;
             st.BumpAge = Envelope(st.BumpAge, rise, c.BumpTau) * rise;
@@ -973,9 +943,7 @@ public sealed unsafe partial class Plugin
                 known.BumpBody = Math.Clamp(known.Speed / RunSpeed, 0f, 1f);
             }
 
-            // Only bumps you are in: two strangers brushing past each other across the plaza is not something to make
-            // a noise about, and with a crowd being ticked it was most of them. Your own scan covers both directions,
-            // since being run into is found from here too.
+            // Noise only for bumps you are in; your own scan finds both directions.
             if (local)
             {
                 this.WantGrunt((nint)chr, st.Id);
@@ -996,7 +964,6 @@ public sealed unsafe partial class Plugin
     {
         ref var n = ref CollectionsMarshal.GetValueRefOrAddDefault(this.neighbours, addr, out var existed);
         var dt = (float)(now - n.Seen);
-        // The allocator reuses addresses, so a changed spawn id means this is someone else and the old position is not theirs.
         var vel = existed && n.Id == id && dt > 1e-4f ? (pos - n.Pos) / dt : Vector3.Zero;
         n.Id = id;
         n.Pos = pos;
@@ -1024,11 +991,8 @@ public sealed unsafe partial class Plugin
         return age < rise ? age / rise : MathF.Exp(-fall * fall);
     }
 
-    // A shove from the front or behind pitches the torso; one from the side mostly turns it, the shoulder that was hit
-    // swinging back so the chest faces the other body, with a little sideways lean. The lean was the whole sideways
-    // reaction at first and read as swaying on bumped bystanders, who are always hit side-on by someone running past.
-    // The twist is full from a fifth of a turn off centre and fades to nothing head-on. The head goes with the
-    // shoulders: the slope lean holds it level, a shove does not.
+    // Front or back pitches the torso; a side hit mostly twists it to face the other body (full from a fifth of a turn
+    // off centre), with a little lean: lean alone read as swaying on bystanders, who are always hit side-on.
     private void ShoveTorso(ref Frame f, ref Snapshot snap, bool active)
     {
         var c = this.Settings;
@@ -1066,29 +1030,20 @@ public sealed unsafe partial class Plugin
         var yawing = MathF.Abs(bodyYaw) >= 0.002f;
         var q = yawing ? Quaternion.CreateFromAxisAngle(Vector3.UnitY, bodyYaw) : Quaternion.Identity;
 
-        // The head keeps the orientation the animation gave it, so the character goes on looking where it was looking
-        // while the shoulders and hips are carried out from under it. The spine reaches the neck having accumulated
-        // exactly `turn`, so undoing that and the rigid yaw holds the head still. A half counter was tried back when
-        // nothing but the spine moved and read as weak, hence a knob rather than a constant.
+        // The neck undoes `turn` and the rigid yaw so the head keeps looking where it was. A knob: a half counter read weak.
         var hold = Math.Clamp(c.BumpHeadHold, 0f, 1f);
         var neck = hold > 0.001f
             ? Quaternion.Slerp(Quaternion.Identity, Quaternion.Inverse(q) * Quaternion.Inverse(turn), hold)
             : Quaternion.Identity;
         ApplySpineLean(f.Skel, f.Pose, in st.Chain, turn, neck);
 
-        // At speed the whole body is knocked round as well, hips and all, while a standing body keeps the hit in its
-        // shoulders. After the torso, so the torso axes are the animation's own; the rigid turn then carries torso,
-        // head and partials together. The legs keep the stride: each ankle goes back where the animation had it, its
-        // orientation turned back and the knee bending the way it did, so the hips go with the pelvis and the legs
-        // re-bend to reach. Letting the feet swing round with the body read as the body sliding (seen in game).
-        // A shove moves you. Without this a body that was standing still took the hit entirely in its spine, hips and
-        // feet nailed to the floor, which read as bending at the waist rather than being shoved (seen in game); the
-        // one that was running looked right only because the turn above gave it the leg re-solve as a side effect.
-        // The knees are not posed: the hips are carried off the feet and the legs below bend because they must reach.
-        // Model space, so a fraction of the bind leg length needs no scale factor.
+        // At speed the whole body turns too, after the torso so its axes stay the animation's. The shove carries the hips
+        // off the feet and each ankle is solved back where it stood, so the knees bend to reach: feet swinging round
+        // read as sliding, hips nailed down as folding at the waist. Model space: the Frac needs no scale.
         var shove = push / len * (c.BumpShoveFrac * f.LegLen * envelope * st.Blend * st.BumpPush.Length());
         shove.Y = 0f;
-        if (!yawing && shove.LengthSquared() < 1e-8f)
+        var shoving = shove.LengthSquared() >= 1e-8f && float.IsFinite(shove.X + shove.Z);
+        if (!yawing && !shoving)
         {
             return;
         }
@@ -1102,12 +1057,7 @@ public sealed unsafe partial class Plugin
             bend[s] = Bones.Pos(in f.Bones[leg.Knee]) - Bones.Pos(in f.Bones[leg.Hip]);
         }
 
-        var shoving = shove.LengthSquared() >= 1e-8f && float.IsFinite(shove.X + shove.Z);
-        if (yawing || shoving)
-        {
-            MoveBody(f.Skel, f.Pose, q, shoving ? shove : Vector3.Zero);
-        }
-
+        MoveBody(f.Skel, f.Pose, q, shoving ? shove : Vector3.Zero);
         var back = Quaternion.Inverse(q);
         for (var s = 0; s < 2; s++)
         {

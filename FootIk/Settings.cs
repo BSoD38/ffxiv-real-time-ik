@@ -5,8 +5,7 @@ using Dalamud.Configuration;
 
 namespace FootIk;
 
-// Where the mod works. Saved under its own name: the old `Enabled` bool in a saved file would not read into an enum.
-// The descriptions are what the settings window puts in the dropdown.
+// Descriptions are the dropdown labels.
 public enum Where
 {
     [Description("Off")] Off,
@@ -26,7 +25,6 @@ public enum Who
 }
 
 // Fields ending in Frac are fractions of the bind-pose leg length, so races of every size behave alike.
-// Saved by Dalamud as JSON, and reset field by field through reflection.
 public sealed class Settings : IPluginConfiguration
 {
     public int Version { get; set; } = 1;
@@ -40,7 +38,7 @@ public sealed class Settings : IPluginConfiguration
     public bool ShowRuler;
     public float BlendSeconds = 0.15f;
     public float PelvisTau = 0.08f;
-    public float StrideTau = 0.15f; // body smoothing at a run, where it follows the ground under itself; 0 keeps the standing rule at every speed
+    public float StrideTau = 0.15f; // 0 keeps the standing rule at every speed
     public float FootTau = 0.03f; // also sets how far ahead a moving foot looks for a step; 0 turns both off
 
     public float MaxDropFrac = 0.40f;
@@ -82,19 +80,19 @@ public sealed class Settings : IPluginConfiguration
     public float LeanTau = 0.3f;
 
     public bool Bump;
-    public bool Shoved = true;           // someone running into you counts, not only you running into them
-    public bool BumpNpcs;                // townspeople count as people to bump into
-    public bool Grunt;                   // both bodies play their own damage-taken voice line on a bump
-    public bool ShoveSound;              // a thud at the point of contact, from sounds/shove.scd; needs Penumbra
+    public bool Shoved = true;
+    public bool BumpNpcs;
+    public bool Grunt;
+    public bool ShoveSound;              // sounds/shove.scd; needs Penumbra
     public float ShoveVolume = 1f;
-    public float BumpRadiusFrac = 0.45f; // half the centre distance at which two bodies touch, in leg lengths
-    public float BumpMinSpeed = 5f;      // m/s closing on them, a world speed like StillSpeed
+    public float BumpRadiusFrac = 0.45f; // half the centre distance at which two bodies touch
+    public float BumpMinSpeed = 5f;      // m/s closing speed, a world speed like StillSpeed
     public float BumpMaxDeg = 25f;
     public float BumpRiseSeconds = 0.08f;
     public float BumpTau = 0.5f;
-    public float BumpBodyTurn = 1f;       // share of the turn the whole body takes at running speed, feet included
-    public float BumpShoveFrac = 0.1f;    // how far the hips are carried off the planted feet, in leg lengths
-    public float BumpHeadHold = 0.4f;     // how much of the spine turn and body yaw the neck undoes, so the head holds still
+    public float BumpBodyTurn = 1f;
+    public float BumpShoveFrac = 0.1f;
+    public float BumpHeadHold = 0.4f;
     public float BumpCooldown = 0.6f;     // s between any two bumps
     public float BumpSameCooldown = 0.9f; // s before the same character counts again
 
@@ -109,8 +107,8 @@ public sealed class Settings : IPluginConfiguration
     public float OthersRadius = 15f; // yalms from the local player, not a body-relative distance
 
     public bool MeshRefine; // experimental: the ground height read off the visible level geometry, gated by collision
-    public float MeshRadius = 30f; // yalms around the local player that are read, a world distance like OthersRadius
-    public float MeshBand = 0.35f; // metres the visible ground may differ from collision and still be believed: about a tall stair tread, a property of the level rather than the character
+    public float MeshRadius = 30f; // yalms, a world distance like OthersRadius
+    public float MeshBand = 0.35f; // metres, not a Frac: a property of the level
 
     public bool WorksIn(bool groupPose) => groupPose ? this.Where is Where.GroupPose or Where.Both : this.Where is Where.InGame or Where.Both;
 
@@ -121,8 +119,7 @@ public sealed class Settings : IPluginConfiguration
     // Puts fields back to how they shipped; null resets every one of them.
     public void Reset(string[]? fields = null) => this.Restore(f => fields is null || Array.IndexOf(fields, f.Name) >= 0);
 
-    // A truncated or hand-edited file can deserialise a NaN, and every comparison against NaN is false, so the guards
-    // downstream let it through as "not too far".
+    // A NaN from a hand-edited file passes every < / > guard downstream.
     public void Repair() => this.Restore(f => f.FieldType == typeof(float) && !float.IsFinite((float)f.GetValue(this)!));
 
     // Reflection so a field added later is covered without being listed anywhere.

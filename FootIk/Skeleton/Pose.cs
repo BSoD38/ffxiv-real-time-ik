@@ -97,14 +97,20 @@ public sealed unsafe partial class Plugin
             }
         }
 
-        for (var i = 0; i < sub.Length; i++)
+        return WriteIfFinite(pose, sub, nw);
+    }
+
+    private static bool WriteIfFinite(hkaPose* pose, int[] sub, ReadOnlySpan<Xf> nw)
+    {
+        foreach (ref readonly var x in nw)
         {
-            if (!nw[i].IsFinite)
+            if (!x.IsFinite)
             {
                 return false;
             }
         }
 
+        var bones = pose->ModelPose.Data;
         for (var i = 0; i < sub.Length; i++)
         {
             Bones.Write(ref bones[sub[i]], in nw[i]);
@@ -124,9 +130,7 @@ public sealed unsafe partial class Plugin
         public Xf Old;
     }
 
-    // The three weapon slots of the character's draw data. Attach type 4 is fastened to a bone of `OwnerSkeleton`, the
-    // body; `TargetSkeleton` is the weapon's own skeleton (read in game: a first pass that matched the target found
-    // nothing with a shield drawn).
+    // Attach type 4 hangs off a bone of OwnerSkeleton, the body; TargetSkeleton is the weapon's own.
     private static int AnchorWeapons(Character* chr, Skeleton* skel, hkaPose* pose, Span<WeaponAnchor> into)
     {
         var n = 0;
@@ -199,10 +203,7 @@ public sealed unsafe partial class Plugin
 
     private static Xf AsXf(in Transform t) => new() { T = t.Position, R = t.Rotation, S = t.Scale };
 
-    // Turns the whole model-space pose about the character origin and then shifts it, in one walk. Face and hair
-    // partials were attached to body bones before this hook ran; a rigid move of the whole pose carries an anchor and
-    // its partial the same way. With the feet then solved back to where they stood, the shift is what bends the knees:
-    // the hips go and the legs must reach.
+    // Rigid turn about the origin and shift of every partial, so face and hair move with their anchors.
     private static void MoveBody(Skeleton* skel, hkaPose* pose, Quaternion q, Vector3 by)
     {
         for (var p = 0; p < skel->PartialSkeletonCount; p++)
@@ -273,20 +274,10 @@ public sealed unsafe partial class Plugin
             }
         }
 
-        for (var i = 0; i < sub.Length; i++)
+        if (!WriteIfFinite(pose, sub, nw))
         {
-            if (!nw[i].IsFinite)
-            {
-                return;
-            }
+            return;
         }
-
-        for (var i = 0; i < sub.Length; i++)
-        {
-            Bones.Write(ref bones[sub[i]], in nw[i]);
-        }
-
-        pose->LocalInSync = 0;
 
         // Face and hair partials were connected to body bones before this hook ran, so re-derive each from how its
         // anchor moved, or the face stays where the head was.

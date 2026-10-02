@@ -54,7 +54,10 @@ FootIk/Skeleton/LegChain.cs  # bone lookup by name (the Bones helpers), subtrees
                              #   Havok transform read/write
 FootIk/Skeleton/Solver.cs    # pure math: Xf, Compose/Relative, FromTo, TwoBone, Pick, SelfTest
 FootIk/Audio/Grunt.cs        # bump grunts and the shove sound, played from Framework.Update, never from the detour
-FootIk/Ui/Overlay.cs         # /ik window as a KamiToolKit NativeAddon: tab bar, scrolling body, widget builders + ImGui world markers
+FootIk/Ui/Overlay.cs         # /ik window as a KamiToolKit NativeAddon: tab bar, scrolling body, refresh, save, reset
+FootIk/Ui/Widgets.cs         # Overlay partial: the widget builders the tabs are made of (Check, Slide, Pick, Fold, Columns…)
+FootIk/Ui/WorldMarkers.cs    # Overlay partial: ImGui ankle dots and ruler drawn over the scene
+FootIk/Ui/Tabs/*.cs          # one Overlay partial per tab: its builder and the fields its reset puts back
 FootIk/Ui/Snapshot.cs        # per-frame readouts, written once per tick, read on the draw thread
 docs/PLAN.md                 # the source of truth for research, offsets and milestones
 ```
