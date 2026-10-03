@@ -204,7 +204,9 @@ internal sealed partial class Overlay : NativeAddon
     {
         try
         {
-            await Plugin.Framework.RunOnFrameworkThread(owner.Teardown);
+            // Run, not RunOnFrameworkThread: awaiting the latter resumes this method on the framework thread, where
+            // NativeAddon.CloseAsync never finishes because it waits out a closing animation that needs frames to pass.
+            await Plugin.Framework.Run(owner.Teardown);
         }
         catch (Exception ex)
         {
@@ -213,24 +215,18 @@ internal sealed partial class Overlay : NativeAddon
             Plugin.Log.Error(ex, "FootIk: teardown failed");
         }
 
-        // That await resumes on the framework thread, and NativeAddon.CloseAsync refuses to run there: it waits out
-        // the window's closing animation, which needs frames to pass, so waiting from the thread that draws them
-        // would never finish. Task.Run puts the rest back on the pool.
-        await Task.Run(async () =>
+        if (window is not null)
         {
-            if (window is not null)
+            if (window.confirm is not null)
             {
-                if (window.confirm is not null)
-                {
-                    await window.confirm.DisposeAsync();
-                    window.confirm = null;
-                }
-
-                await window.DisposeAsync();
+                await window.confirm.DisposeAsync();
+                window.confirm = null;
             }
 
-            await KamiToolKitLibrary.DisposeAsync();
-        });
+            await window.DisposeAsync();
+        }
+
+        await KamiToolKitLibrary.DisposeAsync();
     }
 
     // Settings save when an edit settles rather than on every step of a drag: SavePluginConfig writes the file
