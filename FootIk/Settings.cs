@@ -69,6 +69,7 @@ public sealed class Settings : IPluginConfiguration
     public float MaxBodyShiftFrac = 1f; // a gathered stance that would carry the body further than this is given up on
     public float GatherStraighten = 0.7f;
     public float GatherForward = 0.7f;
+    public float GatherUpright; // share of the spine's forward pitch taken out while gathered
     public float MaxPelvisRaiseFrac = 0.3f;
 
     public bool SlopeLean;

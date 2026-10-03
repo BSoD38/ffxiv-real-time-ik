@@ -62,6 +62,7 @@ public struct Snapshot
     public float Speed;
     public float LeanDeg;
     public float SpinePitchDeg;
+    public float UprightDeg;
     public float BumpDeg;
     public float Height; // the game's own reading of the body's height, what bumps compare
     public bool OnFloor;

@@ -30,6 +30,7 @@ internal sealed class CharState
     public float BodyY = float.NaN; // world height of the origin plus our drop, last frame the feet were placed
     public Vector3 BodyShift;      // model space
     public float Lean;             // radians
+    public float Upright;          // 0..1, how far a gathered stance has straightened the back
     public float BumpAge = float.PositiveInfinity; // seconds since this body was last bumped
     public Vector3 BumpPush;       // world, horizontal: the way it was pushed, at most a unit long, shorter for a hit below the shoulders
     public ulong BumpTarget;       // the character last run into

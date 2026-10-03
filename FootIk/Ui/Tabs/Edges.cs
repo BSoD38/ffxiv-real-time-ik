@@ -8,7 +8,7 @@ internal sealed partial class Overlay
     private static readonly string[] EdgesFields =
     [
         nameof(Settings.GatherFeet), nameof(Settings.GatherToPosition), nameof(Settings.MinStanceFrac), nameof(Settings.GatherStraighten),
-        nameof(Settings.GatherForward), nameof(Settings.GatherPrecision), nameof(Settings.GatherTauIn), nameof(Settings.GatherTauOut),
+        nameof(Settings.GatherForward), nameof(Settings.GatherUpright), nameof(Settings.GatherPrecision), nameof(Settings.GatherTauIn), nameof(Settings.GatherTauOut),
         nameof(Settings.MaxStanceFrac), nameof(Settings.MaxBodyShiftFrac),
     ];
 
@@ -35,6 +35,8 @@ internal sealed partial class Overlay
                     "How far gathering may move your character's body onto the feet. Further than this and the plugin leaves the feet alone for that frame, so a bad reading never throws your character across the room.", () => c.GatherFeet),
                 this.Slide("Straighten legs", () => c.GatherStraighten, v => c.GatherStraighten = v, 0f, 1f, 100f, v => $"{v:F2}",
                     "How much the legs straighten when the feet are gathered. Avoids legs being flexed while gathered on some races.", () => c.GatherFeet),
+                this.Slide("Straighten back", () => c.GatherUpright, v => c.GatherUpright = v, 0f, 1f, 100f, v => $"{v:F2}",
+                    "How much a hunched back straightens when the feet are gathered. Avoids stooping over narrow supports on some races.", () => c.GatherFeet),
                 this.Slide("Feet forward", () => c.GatherForward, v => c.GatherForward = v, 0f, 1f, 100f, v => $"{v:F2}",
                     "How strongly the knees and feet turn to face forward when gathered. Avoids duck feet on some races.", () => c.GatherFeet),
                 this.Slide("Ease in", () => c.GatherTauIn, v => c.GatherTauIn = v, 0.05f, 1f, 100f, v => $"{v:F2} s",

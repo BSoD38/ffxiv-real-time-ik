@@ -35,7 +35,7 @@ internal sealed partial class Overlay
             this.Section("Your character"),
             this.Readout(() => Activity(in p.Snap, c)),
             this.Readout(() => $"Moving at {p.Snap.Speed:F1} m/s"),
-            this.Readout(() => $"Body height {Cm(p.Snap.Applied)}   lean {p.Snap.LeanDeg:F0} deg   bump {p.Snap.BumpDeg:F0} deg   tilt to the ground {p.Snap.SitTiltDeg:F0} deg"),
+            this.Readout(() => $"Body height {Cm(p.Snap.Applied)}   lean {p.Snap.LeanDeg:F0} deg   straightened {p.Snap.UprightDeg:F0} deg   bump {p.Snap.BumpDeg:F0} deg   tilt to the ground {p.Snap.SitTiltDeg:F0} deg"),
             this.Readout(() => $"Last bumped into: {p.LastBump ?? "nobody yet"}"),
             this.Section("Feet"),
             this.ColumnHeads(),

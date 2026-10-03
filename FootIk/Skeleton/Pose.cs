@@ -238,8 +238,9 @@ public sealed unsafe partial class Plugin
         }
     }
 
-    // turn is spread a third on each spine bone; neck goes on the neck bone on top of it, so the head can be held level.
-    private static void ApplySpineLean(Skeleton* skel, hkaPose* pose, in LegChain chain, Quaternion turn, Quaternion neck)
+    // turn is spread a third on each spine bone; neck and arms go on the neck and upper arms on top of it, so the head
+    // and the arms can be held where they were.
+    private static void ApplySpineLean(Skeleton* skel, hkaPose* pose, in LegChain chain, Quaternion turn, Quaternion neck, Quaternion arms)
     {
         var sub = chain.SpineSub;
         var ps = chain.SpineParentSlot;
@@ -271,6 +272,10 @@ public sealed unsafe partial class Plugin
             else if (i == chain.NeckSlot)
             {
                 nw[i].R = Quaternion.Normalize(neck * nw[i].R);
+            }
+            else if (sub[i] == chain.LeftArm.Hip || sub[i] == chain.RightArm.Hip)
+            {
+                nw[i].R = Quaternion.Normalize(arms * nw[i].R);
             }
         }
 

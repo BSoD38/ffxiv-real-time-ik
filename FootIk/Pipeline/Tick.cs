@@ -797,6 +797,8 @@ public sealed unsafe partial class Plugin
 
         f.St.Lean = Toward(f.St.Lean, leanTarget, Ease(f.Dt, c.LeanTau));
         snap.LeanDeg = f.St.Lean * 180f / MathF.PI;
+        var gathered = active && (snap.Left.Gathered || snap.Right.Gathered);
+        f.St.Upright = Toward(f.St.Upright, gathered ? 1f : 0f, Ease(f.Dt, gathered ? c.GatherTauIn : c.GatherTauOut));
         if (!active || f.St.Chain.SpineSub.Length == 0)
         {
             return;
@@ -807,7 +809,8 @@ public sealed unsafe partial class Plugin
         var spineDir = Bones.Pos(in f.Bones[f.St.Chain.Neck]) - Bones.Pos(in f.Bones[f.St.Chain.SpineA]);
         var pitch = MathF.Atan2(Vector3.Dot(spineDir, f.St.Chain.BindForward), spineDir.Y);
         snap.SpinePitchDeg = pitch * 180f / MathF.PI;
-        var leanApplied = f.St.Lean * f.St.Blend;
+        var straighten = MathF.Max(0f, pitch) * Math.Clamp(c.GatherUpright, 0f, 1f) * f.St.Upright;
+        var leanApplied = (f.St.Lean - straighten) * f.St.Blend;
         var room = (c.MaxTotalPitchDeg * MathF.PI / 180f) - pitch;
         var roomBack = pitch - (c.MinTotalPitchDeg * MathF.PI / 180f);
         if (leanApplied > room)
@@ -819,10 +822,14 @@ public sealed unsafe partial class Plugin
             leanApplied = -MathF.Max(0f, roomBack);
         }
 
-        if (MathF.Abs(leanApplied) > 0.002f)
+        // The arms lean with the slope but not with the straightening, or they swing up behind the back: they take back
+        // the share of the turn that was straightening, as far as the clamp above let it through.
+        var armsBack = Math.Clamp((f.St.Lean * f.St.Blend) - leanApplied, 0f, straighten * f.St.Blend);
+        snap.UprightDeg = armsBack * 180f / MathF.PI;
+        if (MathF.Abs(leanApplied) > 0.002f || armsBack > 0.002f)
         {
             var axis = Vector3.Cross(Vector3.UnitY, f.St.Chain.BindForward);
-            ApplySpineLean(f.Skel, f.Pose, in f.St.Chain, Quaternion.CreateFromAxisAngle(axis, leanApplied), Quaternion.CreateFromAxisAngle(axis, -leanApplied));
+            ApplySpineLean(f.Skel, f.Pose, in f.St.Chain, Quaternion.CreateFromAxisAngle(axis, leanApplied), Quaternion.CreateFromAxisAngle(axis, -leanApplied), Quaternion.CreateFromAxisAngle(axis, armsBack));
         }
     }
 
@@ -1035,7 +1042,7 @@ public sealed unsafe partial class Plugin
         var neck = hold > 0.001f
             ? Quaternion.Slerp(Quaternion.Identity, Quaternion.Inverse(q) * Quaternion.Inverse(turn), hold)
             : Quaternion.Identity;
-        ApplySpineLean(f.Skel, f.Pose, in st.Chain, turn, neck);
+        ApplySpineLean(f.Skel, f.Pose, in st.Chain, turn, neck, Quaternion.Identity);
 
         // At speed the whole body turns too, after the torso so its axes stay the animation's. The shove carries the hips
         // off the feet and each ankle is solved back where it stood, so the knees bend to reach: feet swinging round
